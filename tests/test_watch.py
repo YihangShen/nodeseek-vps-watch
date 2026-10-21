@@ -380,6 +380,35 @@ class WatchTestCase(unittest.TestCase):
         self.assertIn("VMISS", captured["text"])
         self.assertIsNotNone(state["last_digest"])
 
+    def test_digest_marks_ai_failure_in_intro(self):
+        hit = {
+            "title": "VMISS 美西 CN2 GIA 补货",
+            "link": "https://www.nodeseek.com/post-1-1",
+            "category": "info",
+            "description": "三网优化，库存有限",
+            "matched": ["vmiss"],
+            "score": 16,
+            "detected_at": "2026-10-21T06:00:00+00:00",
+        }
+        watch.HITS_PATH.write_text(json.dumps(hit, ensure_ascii=False) + "\n", encoding="utf-8")
+        cfg = watch.deep_merge(self.cfg, {"ai": {"enabled": True, "model": "test", "api_key": "sk-test"}})
+        captured = {}
+
+        def fake_send(_cfg, subject, html_body, text_body):
+            captured.update(subject=subject, html=html_body, text=text_body)
+            return True
+
+        original_send, original_ai = watch.send_mail, watch.ai_summary
+        watch.send_mail = fake_send
+        watch.ai_summary = lambda _cfg, _hits, _window: None  # 模拟调用失败
+        try:
+            state = {"last_digest": None, "seen": [], "max_id": 0}
+            self.assertEqual(watch.command_digest(cfg, state=state, use_ai=True), 0)
+        finally:
+            watch.send_mail, watch.ai_summary = original_send, original_ai
+        self.assertIn("AI 摘要本轮不可用", captured["text"])
+        self.assertIn("VMISS", captured["text"])
+
     def test_render_html_escapes_content(self):
         item = {
             "title": "<script>alert(1)</script>",

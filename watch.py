@@ -848,6 +848,8 @@ def command_digest(
         if gap_links:
             intro += f" · 另有 {len(gap_links)} 条帖子可能落在 RSS 窗口之外"
         summary = ai_summary(cfg, hits, window) if use_ai else None
+        if summary is None and use_ai and (cfg.get("ai") or {}).get("enabled") and hits:
+            intro += " · ⚠️ AI 摘要本轮不可用，下面这封是关键词版（详见日志）"
         if summary:
             subject = f"NodeSeek 美西 VPS 日报（{len(hits)} 条）"
             raw_list = render_text(hits, "", "").strip()
