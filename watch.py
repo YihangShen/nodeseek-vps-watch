@@ -56,6 +56,7 @@ DEFAULT_CONFIG = {
         "base_url": "https://api.openai.com/v1",
         "model": "",
         "api_key": "",
+        "user_profile": "",
         "timeout": 60,
     },
     "smtp": {
@@ -654,13 +655,16 @@ def recent_gaps(state: dict, since: Optional[str], threshold: int) -> list[int]:
     return sorted(set(ids))
 
 
-AI_SYSTEM_PROMPT = (
-    "你在帮一位中国大陆用户盯美西 VPS 情报，产出每天一封的中文分析邮件。\n"
-    "用户画像：中国大陆家宽；只要美西，洛杉矶优先；回程要对联通友好"
-    "（9929 / AS9929、CMIN2、CN2 GIA、DC6、DC9 都算好，4837 次之）；"
-    "非常看重 IP 质量，希望是原生或干净 IP，能解锁 ChatGPT、Claude、Gemini、Netflix 等主流服务；"
-    "带宽和流量不用很大但不能是小口子，参考定位是 VMISS LA TRI Basic 这类 1C1G / 500GB 套餐；"
-    "不追高溢价的二手转让。\n"
+# 默认买家画像保持通用，个人偏好通过 config.ai.user_profile 或环境变量 AI_USER_PROFILE 注入
+DEFAULT_USER_PROFILE = (
+    "中国大陆家宽用户，运营商不限，最好对联通 / 电信 / 移动都友好；只要美西，洛杉矶优先；"
+    "看重 IP 质量，希望原生或干净 IP，能解锁 ChatGPT / Claude / Gemini / Netflix 等主流服务；"
+    "带宽和流量不用很大但不能是小口子；不追高溢价的二手转让。"
+)
+
+AI_SYSTEM_PROMPT_TEMPLATE = (
+    "你在帮一位用户盯美西 VPS 情报，产出每天一封的中文分析邮件。\n"
+    "用户画像：{profile}\n"
     "输出结构：\n"
     "1) 第一句话直接给结论：今天有没有值得下手的东西，值不值得现在行动。\n"
     "2) 分三段写：「值得立刻看」「可以慢慢看」「可以忽略」，没有内容就写「无」。\n"
@@ -671,6 +675,12 @@ AI_SYSTEM_PROMPT = (
     "硬性要求：只使用给你的信息，绝不编造价格、库存、优惠码、机房或解锁结论；"
     "摘要里的测速报告、终端乱码可以忽略。中文，不要客套话，全文 600 字以内。"
 )
+
+
+def build_system_prompt(cfg: dict) -> str:
+    ai = cfg.get("ai") or {}
+    profile = (ai.get("user_profile") or os.environ.get("AI_USER_PROFILE") or "").strip()
+    return AI_SYSTEM_PROMPT_TEMPLATE.format(profile=profile or DEFAULT_USER_PROFILE)
 
 
 def build_ai_prompt(hits: list[dict], window: str) -> str:
@@ -736,7 +746,7 @@ def ai_summary(cfg: dict, hits: list[dict], window: str) -> Optional[str]:
         "Authorization": f"Bearer {api_key}",
         "User-Agent": UA,
     }
-    system_prompt = AI_SYSTEM_PROMPT
+    system_prompt = build_system_prompt(cfg)
     user_prompt = build_ai_prompt(hits, window)
     chat_payload = {
         "model": model,

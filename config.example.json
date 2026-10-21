@@ -9,6 +9,7 @@
     "base_url": "https://api.openai.com/v1",
     "model": "",
     "api_key": "",
+    "user_profile": "",
     "timeout": 60
   },
   "smtp": {

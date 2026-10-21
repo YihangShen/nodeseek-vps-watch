@@ -1,11 +1,11 @@
 name: NodeSeek Watch
 
 # 说明：GitHub 的 schedule 是「尽力而为」，高峰期可能延迟几分钟到几十分钟。
-# 抢购预告类帖子通常提前几小时发布，这个频率够用；想更快可以把 cron 改成 */10
-# （公开仓库不消耗额度，私有仓库按分钟计费，30 分钟一次大约 1400 分钟/月）。
+# 公开仓库的 Actions 分钟数不计费，所以用 10 分钟一次换更快的响应；
+# 如果要改成别的频率，直接改下面的 cron 表达式即可。
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "*/10 * * * *"
   workflow_dispatch:
 
 permissions:
