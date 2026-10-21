@@ -922,6 +922,15 @@ def command_test_email(cfg: dict) -> int:
     return command_send(cfg, "连通性测试", None, f"NodeSeek 监控邮件通道测试成功。\n时间：{now}\n运行目录：{BASE}", None)
 
 
+def command_mark_digested(cfg: dict) -> int:
+    """外部（如 AI 助手）自己写完并发出日报后，用它推进汇总水位线。"""
+    state = load_state()
+    state["last_digest"] = datetime.now(timezone.utc).isoformat()
+    save_state(state, cfg["history_limit"])
+    print(f"已标记汇总时间: {state['last_digest']}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="NodeSeek 美西 VPS 情报监控")
     parser.add_argument("--version", action="version", version=f"nodeseek-vps-watch {__version__}")
@@ -945,6 +954,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("status", help="查看运行状态")
     sub.add_parser("test-email", help="发送测试邮件")
+    sub.add_parser("mark-digested", help="把当前时间记为已汇总（外部发信后调用）")
     return parser
 
 
@@ -965,6 +975,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return command_status(cfg)
     if args.command == "test-email":
         return command_test_email(cfg)
+    if args.command == "mark-digested":
+        return command_mark_digested(cfg)
     return 2
 
 

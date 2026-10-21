@@ -267,6 +267,13 @@ class WatchTestCase(unittest.TestCase):
     def test_send_mail_skips_when_disabled(self):
         self.assertFalse(watch.send_mail(self.cfg, "标题", "<p>hi</p>", "hi"))
 
+    def test_mark_digested_advances_watermark(self):
+        watch.STATE_PATH.write_text(json.dumps({"last_digest": None, "seen": []}), encoding="utf-8")
+        self.assertEqual(watch.command_mark_digested(self.cfg), 0)
+        state = json.loads(watch.STATE_PATH.read_text(encoding="utf-8"))
+        self.assertIsNotNone(state["last_digest"])
+        self.assertEqual(watch.read_hits_since(state["last_digest"]), [])
+
     def test_empty_digest_keeps_last_digest_when_mail_disabled(self):
         state = {"last_digest": None, "seen": [], "max_id": 0}
         self.assertEqual(watch.command_digest(self.cfg, state=state), 0)

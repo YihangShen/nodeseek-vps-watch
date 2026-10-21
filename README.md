@@ -97,8 +97,12 @@ python3 watch.py test-email
 
 - `watch.py run`：每 60 秒轮询。只有分数够高、且标题里带线路关键词（CN2 GIA、CMIN2、
   9929、4837、DC6 等）的帖子才即时发信，避免变成骚扰。
-- `watch.py digest`：把上次汇总之后的所有命中打包成一封日报。默认连「今天没有命中」也会发一封，
-  用来确认监控还活着；把 `digest_even_if_empty` 改成 `false` 就只在有命中时才发。
+- `watch.py digest`：把上次汇总之后的所有命中打包成一封日报。`digest_even_if_empty` 控制
+  没有命中时是否也发一封（默认 `false`，只在有命中时发）。
+
+常见分工是两层：AI 助手在 21:00 写一封分析日报（更懂买家需求），
+脚本在 21:30 检查是否还有没汇总的命中，有就补发一封关键词版；没有就不打扰。
+助手自己发完信后调用 `watch.py mark-digested` 推进水位线，避免兜底重复发信。
 
 日报里的抢购时间、库存和优惠码都来自 RSS 摘要，摘要里没写的信息不会替你猜。
 
@@ -224,6 +228,7 @@ python3 watch.py digest --print       # 只打印，方便接 AI 助手
 python3 watch.py digest --json        # 输出 JSON
 python3 watch.py digest --hours 24    # 指定统计窗口
 python3 watch.py send --subject "标题" --body-file body.txt
+python3 watch.py mark-digested        # 外部发信后标记已汇总
 python3 watch.py status               # 查看状态和最近命中
 python3 watch.py test-email           # 测试 SMTP
 python3 watch.py --config /path/to/config.json status

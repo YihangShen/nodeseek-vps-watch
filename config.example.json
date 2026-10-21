@@ -3,7 +3,7 @@
   "instant_threshold": 9,
   "history_limit": 20000,
   "gap_report_threshold": 3,
-  "digest_even_if_empty": true,
+  "digest_even_if_empty": false,
   "ai": {
     "enabled": false,
     "base_url": "https://api.openai.com/v1",
