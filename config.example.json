@@ -3,6 +3,7 @@
   "instant_threshold": 9,
   "history_limit": 20000,
   "gap_report_threshold": 3,
+  "digest_even_if_empty": true,
   "smtp": {
     "enabled": false,
     "host": "smtp.qq.com",

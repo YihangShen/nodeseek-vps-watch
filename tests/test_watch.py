@@ -201,6 +201,11 @@ class WatchTestCase(unittest.TestCase):
     def test_send_mail_skips_when_disabled(self):
         self.assertFalse(watch.send_mail(self.cfg, "标题", "<p>hi</p>", "hi"))
 
+    def test_empty_digest_keeps_last_digest_when_mail_disabled(self):
+        state = {"last_digest": None, "seen": [], "max_id": 0}
+        self.assertEqual(watch.command_digest(self.cfg, state=state), 0)
+        self.assertIsNone(state["last_digest"])
+
     def test_render_html_escapes_content(self):
         item = {
             "title": "<script>alert(1)</script>",

@@ -49,6 +49,7 @@ DEFAULT_CONFIG = {
     "instant_threshold": 9,
     "history_limit": 20000,
     "gap_report_threshold": 3,
+    "digest_even_if_empty": True,
     "smtp": {
         "enabled": False,
         "host": "smtp.qq.com",
@@ -561,15 +562,33 @@ def command_digest(
                 print(f"  {link}")
         return 0
 
-    if not hits and not gap_links:
+    window = format_time(since) if since else "最早记录"
+    if not hits and not gap_links and not cfg.get("digest_even_if_empty", True):
         print("无新的命中记录")
         return 0
 
-    subject = f"NodeSeek 美西 VPS 情报汇总（{len(hits)} 条）"
-    intro = f"统计区间起于 {format_time(since) if since else '最早记录'}"
-    if gap_links:
-        intro += f" · 另有 {len(gap_links)} 条帖子可能落在 RSS 窗口之外"
-    ok = send_mail(cfg, subject, render_html(hits, subject, intro), render_text(hits, subject, intro))
+    if not hits and not gap_links:
+        subject = "NodeSeek 美西 VPS 日报（今日无命中）"
+        intro = f"统计区间起于 {window} · 期间没有出现美西优质线路相关的抢购或补货信息"
+        text_body = f"{subject}\n\n{intro}\n\n监控仍在正常运行。"
+        html_body = (
+            "<html><body style=\"font-family:-apple-system,'PingFang SC',Arial,sans-serif\">"
+            f"<h2 style=\"font-size:17px;color:#111827\">{html.escape(subject)}</h2>"
+            f"<p style=\"color:#6b7280;font-size:13px\">{html.escape(intro)}</p>"
+            "<p style=\"color:#9ca3af;font-size:12px\">来源：NodeSeek 公开 RSS · nodeseek-vps-watch</p>"
+            "</body></html>"
+        )
+    else:
+        subject = f"NodeSeek 美西 VPS 情报汇总（{len(hits)} 条）"
+        intro = f"统计区间起于 {window}"
+        if gap_links:
+            intro += f" · 另有 {len(gap_links)} 条帖子可能落在 RSS 窗口之外"
+        text_body = render_text(hits, subject, intro)
+        if gap_links:
+            text_body += "\n可能漏掉的帖子：\n" + "\n".join(gap_links)
+        html_body = render_html(hits, subject, intro)
+
+    ok = send_mail(cfg, subject, html_body, text_body)
     if ok:
         state["last_digest"] = datetime.now(timezone.utc).isoformat()
         save_state(state, cfg["history_limit"])
