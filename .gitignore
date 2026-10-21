@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 运行时数据
+config.json
+state.json
+state.tmp
+hits.jsonl
+.watch.lock
+logs/
+
+# 编辑器
+.DS_Store
+.idea/
+.vscode/
