@@ -203,13 +203,22 @@ class WatchTestCase(unittest.TestCase):
         self.assertFalse(topical)
         self.assertLess(score, self.cfg["threshold"])
 
-    def test_instant_requires_route_keyword_in_title(self):
-        route_item = {"title": "VMISS 美西 CN2 GIA 补货", "description": "", "category": "info"}
-        no_route_item = {"title": "RackNerd 黑五年付优惠上架", "description": "洛杉矶机房", "category": "info"}
-        score = watch.score_item(route_item, self.cfg["rules"])[0]
-        other_score = watch.score_item(no_route_item, self.cfg["rules"])[0]
-        self.assertTrue(watch.is_instant(route_item, score, self.cfg))
-        self.assertFalse(watch.is_instant(no_route_item, other_score, self.cfg))
+    def test_instant_covers_route_and_brand_deals(self):
+        route_item = {"title": "美西 9929 线路补货 新段", "description": "", "category": "info"}
+        brand_item = {"title": "RackNerd 黑五年付优惠上架", "description": "洛杉矶机房", "category": "info"}
+        for item in (route_item, brand_item):
+            score = watch.score_item(item, self.cfg["rules"])[0]
+            self.assertTrue(watch.is_instant(item, score, self.cfg), item["title"])
+
+    def test_brand_chatter_without_action_is_not_instant(self):
+        item = {"title": "vmiss 又被 D 了？", "description": "节点飘红", "category": "daily"}
+        score = watch.score_item(item, self.cfg["rules"])[0]
+        self.assertFalse(watch.is_instant(item, score, self.cfg))
+
+    def test_presale_notice_is_instant(self):
+        item = {"title": "VMISS 11 月 1 日补货预告，洛杉矶 TRI 新批次", "description": "", "category": "info"}
+        score = watch.score_item(item, self.cfg["rules"])[0]
+        self.assertTrue(watch.is_instant(item, score, self.cfg))
 
     def test_resale_post_is_not_instant(self):
         item = {"title": RESALE_POST[1], "description": RESALE_POST[2], "category": "trade"}

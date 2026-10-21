@@ -96,7 +96,8 @@ DEFAULT_CONFIG = {
         "deal_actions": [
             "抢购", "补货", "上架", "开抢", "开售", "放货", "到货", "库存", "限量",
             "上线", "发售", "预售", "优惠", "促销", "活动", "特价", "折扣", "年付",
-            "上新", "补货通知", "开卖", "秒杀",
+            "上新", "补货通知", "开卖", "秒杀", "预告", "预约", "即将", "提醒",
+            "补货预告", "开售时间", "放售",
         ],
         # exclude：标题命中就整条丢掉（求购、拼车这类不是抢购信息）
         "exclude": [
@@ -331,14 +332,22 @@ def score_item(item: dict, rules: dict) -> tuple[int, list[str], bool]:
 
 
 def is_instant(item: dict, score: int, cfg: dict) -> bool:
-    """只有标题里带优质线路关键词的帖子才会即时打扰。"""
+    """什么值得立刻打扰：线路 + 动作，或者品牌 + 抢购/补货/预告类动作。
+
+    光有品牌没有动作（例如「vmiss 又被 D 了」）不进即时通道，只进日报。
+    """
     if score < cfg["instant_threshold"]:
         return False
     title = item["title"].lower()
     rules = cfg["rules"]
     if any(kw.lower() in title for kw in rules.get("penalty", [])):
         return False
-    return any(kw.lower() in title for kw in rules["routes"])
+    route = any(kw.lower() in title for kw in rules["routes"])
+    brand = any(kw.lower() in title for kw in rules["brands"])
+    action = any(kw.lower() in title for kw in rules["deal_actions"])
+    if route and (brand or action):
+        return True
+    return brand and action
 
 
 def is_vetoed(item: dict, rules: dict) -> bool:
