@@ -1,0 +1,108 @@
+name: NodeSeek Daily Digest
+
+# 每天 13:30 UTC = 21:30 北京时间。只在「上次汇总之后有命中」时才发信，
+# 没有情报的日子完全不打扰。
+on:
+  schedule:
+    - cron: "30 13 * * *"
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: "覆盖统计窗口（小时，留空表示自上次汇总）"
+        required: false
+        default: ""
+      even_if_empty:
+        description: "即使没有命中也要发一封（true/false）"
+        required: false
+        default: "false"
+
+permissions:
+  contents: write
+  models: read
+
+concurrency:
+  group: nodeseek-watch
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 恢复状态（state 分支）
+        run: |
+          if git ls-remote --exit-code --heads origin state >/dev/null 2>&1; then
+            git fetch --quiet --depth=1 origin state:refs/remotes/origin/state
+            git show origin/state:state.json > state.json 2>/dev/null || true
+            git show origin/state:hits.jsonl > hits.jsonl 2>/dev/null || true
+            echo "已恢复状态：state.json $(wc -c < state.json 2>/dev/null || echo 0) 字节"
+          else
+            echo "state 分支还不存在"
+          fi
+
+      - name: 发送 AI 日报
+        env:
+          SMTP_HOST: smtp.qq.com
+          SMTP_PORT: "465"
+          SMTP_SECURITY: ssl
+          SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+          # 默认用 GitHub Models（免费，走内置 token，不需要额外 key）
+          AI_PROVIDER: ${{ vars.AI_PROVIDER || 'github-models' }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_BASE_URL: ${{ vars.AI_BASE_URL }}
+          AI_MODEL: ${{ vars.AI_MODEL }}
+          GITHUB_TOKEN: ${{ github.token }}
+          DIGEST_EVEN_IF_EMPTY: ${{ github.event.inputs.even_if_empty || 'false' }}
+          DIGEST_HOURS: ${{ github.event.inputs.hours }}
+        run: |
+          ARGS="--ai"
+          if [ -n "${DIGEST_HOURS}" ]; then
+            ARGS="$ARGS --hours ${DIGEST_HOURS}"
+          fi
+          python watch.py digest $ARGS
+
+      - name: 保存状态到 state 分支
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -e
+          if [ ! -f state.json ]; then
+            echo "没有状态文件，跳过保存"
+            exit 0
+          fi
+          cd "$RUNNER_TEMP"
+          git clone --quiet --depth=1 "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" state-repo
+          cd state-repo
+          if git ls-remote --exit-code --heads origin state >/dev/null 2>&1; then
+            git fetch --quiet --depth=1 origin state:refs/remotes/origin/state
+            git checkout --quiet -B state origin/state
+          else
+            git checkout --quiet --orphan state
+            git rm -rq --cached . || true
+            find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          fi
+          cp "$GITHUB_WORKSPACE/state.json" state.json
+          [ -f "$GITHUB_WORKSPACE/hits.jsonl" ] && cp "$GITHUB_WORKSPACE/hits.jsonl" hits.jsonl || true
+          git add -f state.json
+          [ -f hits.jsonl ] && git add -f hits.jsonl || true
+          if git diff --cached --quiet; then
+            echo "状态没有变化"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit --quiet -m "chore: update digest state [skip ci]"
+          git push --quiet origin state
+          echo "状态已写回 state 分支"

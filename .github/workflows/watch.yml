@@ -1,0 +1,86 @@
+name: NodeSeek Watch
+
+# 说明：GitHub 的 schedule 是「尽力而为」，高峰期可能延迟几分钟到几十分钟。
+# 抢购预告类帖子通常提前几小时发布，这个频率够用；想更快可以把 cron 改成 */10
+# （公开仓库不消耗额度，私有仓库按分钟计费，30 分钟一次大约 1400 分钟/月）。
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nodeseek-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 恢复状态（state 分支）
+        run: |
+          if git ls-remote --exit-code --heads origin state >/dev/null 2>&1; then
+            git fetch --quiet --depth=1 origin state:refs/remotes/origin/state
+            git show origin/state:state.json > state.json 2>/dev/null || true
+            git show origin/state:hits.jsonl > hits.jsonl 2>/dev/null || true
+            echo "已恢复状态：state.json $(wc -c < state.json 2>/dev/null || echo 0) 字节"
+          else
+            echo "state 分支还不存在，本次建立基线"
+          fi
+
+      - name: 轮询 NodeSeek
+        env:
+          SMTP_HOST: smtp.qq.com
+          SMTP_PORT: "465"
+          SMTP_SECURITY: ssl
+          SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+        run: python watch.py run
+
+      - name: 保存状态到 state 分支
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -e
+          if [ ! -f state.json ]; then
+            echo "没有状态文件，跳过保存"
+            exit 0
+          fi
+          cd "$RUNNER_TEMP"
+          git clone --quiet --depth=1 "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" state-repo
+          cd state-repo
+          if git ls-remote --exit-code --heads origin state >/dev/null 2>&1; then
+            git fetch --quiet --depth=1 origin state:refs/remotes/origin/state
+            git checkout --quiet -B state origin/state
+          else
+            git checkout --quiet --orphan state
+            git rm -rq --cached . || true
+            find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          fi
+          cp "$GITHUB_WORKSPACE/state.json" state.json
+          [ -f "$GITHUB_WORKSPACE/hits.jsonl" ] && cp "$GITHUB_WORKSPACE/hits.jsonl" hits.jsonl || true
+          git add -f state.json
+          [ -f hits.jsonl ] && git add -f hits.jsonl || true
+          if git diff --cached --quiet; then
+            echo "状态没有变化"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit --quiet -m "chore: update watch state [skip ci]"
+          git push --quiet origin state
+          echo "状态已写回 state 分支"

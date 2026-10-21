@@ -24,6 +24,39 @@
 
 ## 快速开始
 
+### 方案 A：部署到 GitHub Actions（推荐，不需要电脑开机）
+
+监控跑在 GitHub 的服务器上，每 30 分钟抓一次 NodeSeek；有值得抢的就发邮件，没有就安静。
+状态存在仓库的 `state` 分支里，不需要服务器、不需要本机常开。
+
+1. Fork 或 clone 这个仓库到自己的账号
+2. 在仓库的 **Settings → Secrets and variables → Actions** 添加三个 Secret：
+
+   | Secret | 说明 |
+   | --- | --- |
+   | `SMTP_EMAIL` | 发件邮箱，例如 `you@qq.com` |
+   | `SMTP_PASSWORD` | SMTP 授权码（不是登录密码） |
+   | `RECEIVER_EMAIL` | 收件邮箱，可以填多个，用逗号分隔 |
+
+3. 打开 **Actions** 标签页，先手动跑一次 `NodeSeek Watch`（建立基线，不会发历史告警）
+4. 之后 `NodeSeek Watch` 每 30 分钟自动跑，`NodeSeek Daily Digest` 每天 21:30（北京时间）
+   在有命中时发一封 AI 分析日报；没有情报的日子不发信
+
+AI 摘要默认走 **GitHub Models**（用工作流内置的 `GITHUB_TOKEN`，免费、不需要额外 key）。
+想换成自己的模型，加两个 Repository variable / secret 即可：
+`AI_PROVIDER=openai`、`AI_BASE_URL`、`AI_MODEL`、`AI_API_KEY`（例如 DeepSeek、通义、OpenAI）。
+AI 不可用时会自动回退成关键词版日报，不会漏发。
+
+几点要知道的：
+
+- GitHub 的 `schedule` 是「尽力而为」，高峰期可能延迟几分钟到几十分钟，秒杀型抢购不一定赶得上，
+  但**抢购预告**通常提前几小时发布，这条链路足够用
+- 私有仓库按 Actions 分钟计费，30 分钟一次大约 1400 分钟/月，在免费额度内；
+  公开仓库不计量，可以把 `watch.yml` 里的 cron 改成 `*/10` 换更快的响应
+- 定时工作流在仓库连续 60 天没有活动时会被自动停用，`state` 分支的定期提交正好避免这一点
+
+### 方案 B：本机运行（可选，延迟更低）
+
 ```bash
 git clone https://github.com/<you>/nodeseek-vps-watch.git
 cd nodeseek-vps-watch

@@ -52,6 +52,7 @@ DEFAULT_CONFIG = {
     "digest_even_if_empty": True,
     "ai": {
         "enabled": False,
+        "provider": "openai",
         "base_url": "https://api.openai.com/v1",
         "model": "",
         "api_key": "",
@@ -187,12 +188,73 @@ def load_config(explicit: Optional[str] = None) -> dict:
         except json.JSONDecodeError as exc:
             raise SystemExit(f"配置文件 {path} 不是合法 JSON: {exc}")
     cfg = deep_merge(DEFAULT_CONFIG, raw)
-    env_pass = os.environ.get("NODESEEK_SMTP_PASS")
-    if env_pass:
-        cfg["smtp"]["password"] = env_pass
-    env_to = os.environ.get("NODESEEK_MAIL_TO")
-    if env_to:
-        cfg["smtp"]["to"] = [addr.strip() for addr in env_to.split(",") if addr.strip()]
+    return apply_env_overrides(cfg)
+
+
+def apply_env_overrides(cfg: dict) -> dict:
+    """环境变量优先于 config.json，便于在 GitHub Actions 里用 Secrets 注入凭据。"""
+    smtp = cfg["smtp"]
+    ai = cfg["ai"]
+
+    def env(*names: str) -> Optional[str]:
+        for name in names:
+            value = os.environ.get(name)
+            if value:
+                return value
+        return None
+
+    text_map = {
+        "host": env("SMTP_HOST"),
+        "security": env("SMTP_SECURITY"),
+        "username": env("SMTP_EMAIL", "SMTP_USER", "NODESEEK_SMTP_USER"),
+        "password": env("SMTP_PASSWORD", "NODESEEK_SMTP_PASS"),
+        "from": env("SMTP_FROM", "MAIL_FROM"),
+    }
+    smtp_from_env = any(text_map.values())
+    for key, value in text_map.items():
+        if value:
+            smtp[key] = value
+    port = env("SMTP_PORT")
+    if port:
+        smtp["port"] = int(port)
+        smtp_from_env = True
+    to = env("MAIL_TO", "RECEIVER_EMAIL", "NODESEEK_MAIL_TO")
+    if to:
+        smtp["to"] = [addr.strip() for addr in to.replace(";", ",").split(",") if addr.strip()]
+        smtp_from_env = True
+    if not smtp.get("enabled") and env("SMTP_ENABLED"):
+        smtp["enabled"] = str(env("SMTP_ENABLED")).lower() in ("1", "true", "yes", "on")
+    # Actions 里只给了 Secrets，不再要求额外配一个开关
+    if smtp_from_env and smtp.get("host") and smtp.get("to") and (smtp.get("from") or smtp.get("username")):
+        smtp["enabled"] = True
+
+    provider = env("AI_PROVIDER")
+    if provider:
+        ai["provider"] = provider
+    api_key = env("AI_API_KEY")
+    if api_key:
+        ai["api_key"] = api_key
+    base_url = env("AI_BASE_URL")
+    if base_url:
+        ai["base_url"] = base_url
+    model = env("AI_MODEL")
+    if model:
+        ai["model"] = model
+    if env("AI_ENABLED"):
+        ai["enabled"] = str(env("AI_ENABLED")).lower() in ("1", "true", "yes", "on")
+
+    provider_name = (ai.get("provider") or "openai").lower()
+    if provider_name in ("github", "github-models", "github_models"):
+        ai["provider"] = "github-models"
+        ai["base_url"] = ai.get("base_url") or "https://models.github.ai/inference"
+        ai["api_key"] = ai.get("api_key") or env("GITHUB_TOKEN") or ""
+        ai["model"] = ai.get("model") or "openai/gpt-4o-mini"
+        ai["enabled"] = True
+    elif (api_key or model or base_url) and ai.get("api_key") and ai.get("model"):
+        ai["enabled"] = True
+
+    if env("DIGEST_EVEN_IF_EMPTY"):
+        cfg["digest_even_if_empty"] = str(env("DIGEST_EVEN_IF_EMPTY")).lower() in ("1", "true", "yes", "on")
     return cfg
 
 

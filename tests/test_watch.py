@@ -276,6 +276,38 @@ class WatchTestCase(unittest.TestCase):
     def test_send_mail_skips_when_disabled(self):
         self.assertFalse(watch.send_mail(self.cfg, "标题", "<p>hi</p>", "hi"))
 
+    def test_env_overrides_smtp_and_ai(self):
+        env = {
+            "SMTP_HOST": "smtp.qq.com",
+            "SMTP_PORT": "465",
+            "SMTP_EMAIL": "sender@qq.com",
+            "SMTP_PASSWORD": "authcode",
+            "RECEIVER_EMAIL": "receiver@example.com",
+            "AI_PROVIDER": "github-models",
+            "GITHUB_TOKEN": "ghs_test_token",
+        }
+        with mock.patch.dict(os.environ, env, clear=False):
+            cfg = watch.apply_env_overrides(watch.deep_merge(watch.DEFAULT_CONFIG, {}))
+        self.assertTrue(cfg["smtp"]["enabled"])
+        self.assertEqual(cfg["smtp"]["port"], 465)
+        self.assertEqual(cfg["smtp"]["to"], ["receiver@example.com"])
+        self.assertEqual(cfg["smtp"]["from"], "sender@qq.com")
+        self.assertTrue(cfg["ai"]["enabled"])
+        self.assertEqual(cfg["ai"]["provider"], "github-models")
+        self.assertEqual(cfg["ai"]["base_url"], "https://models.github.ai/inference")
+        self.assertEqual(cfg["ai"]["model"], "openai/gpt-4o-mini")
+        self.assertEqual(cfg["ai"]["api_key"], "ghs_test_token")
+
+    def test_mail_to_accepts_multiple_addresses(self):
+        with mock.patch.dict(os.environ, {"MAIL_TO": "a@example.com; b@example.com"}, clear=False):
+            cfg = watch.apply_env_overrides(watch.deep_merge(watch.DEFAULT_CONFIG, {}))
+        self.assertEqual(cfg["smtp"]["to"], ["a@example.com", "b@example.com"])
+
+    def test_digest_even_if_empty_env(self):
+        with mock.patch.dict(os.environ, {"DIGEST_EVEN_IF_EMPTY": "true"}, clear=False):
+            cfg = watch.apply_env_overrides(watch.deep_merge(watch.DEFAULT_CONFIG, {}))
+        self.assertTrue(cfg["digest_even_if_empty"])
+
     def test_mark_digested_advances_watermark(self):
         watch.STATE_PATH.write_text(json.dumps({"last_digest": None, "seen": []}), encoding="utf-8")
         self.assertEqual(watch.command_mark_digested(self.cfg), 0)
