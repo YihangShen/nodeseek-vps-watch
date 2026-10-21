@@ -56,8 +56,11 @@ jobs:
           SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
-          # 默认用 GitHub Models（免费，走内置 token，不需要额外 key）
-          AI_PROVIDER: ${{ vars.AI_PROVIDER || 'github-models' }}
+          # 不配 AI_* 也能跑：日报会退化成关键词版。
+          # 想用 AI 分析，加一个 AI_API_KEY secret，再按需加 AI_BASE_URL / AI_MODEL variable。
+          # 例：DeepSeek  AI_BASE_URL=https://api.deepseek.com/v1  AI_MODEL=deepseek-chat
+          #     通义千问   AI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1  AI_MODEL=qwen-plus
+          AI_PROVIDER: ${{ vars.AI_PROVIDER || 'openai' }}
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
           AI_BASE_URL: ${{ vars.AI_BASE_URL }}
           AI_MODEL: ${{ vars.AI_MODEL }}

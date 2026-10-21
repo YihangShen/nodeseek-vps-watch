@@ -42,10 +42,28 @@
 4. 之后 `NodeSeek Watch` 每 30 分钟自动跑，`NodeSeek Daily Digest` 每天 21:30（北京时间）
    在有命中时发一封 AI 分析日报；没有情报的日子不发信
 
-AI 摘要默认走 **GitHub Models**（用工作流内置的 `GITHUB_TOKEN`，免费、不需要额外 key）。
-想换成自己的模型，加两个 Repository variable / secret 即可：
-`AI_PROVIDER=openai`、`AI_BASE_URL`、`AI_MODEL`、`AI_API_KEY`（例如 DeepSeek、通义、OpenAI）。
-AI 不可用时会自动回退成关键词版日报，不会漏发。
+日报的 AI 分析是可选的：**不配任何 key 也能用**，只是日报会退化成「分档 + 命中理由 + 清洗后摘要」
+的关键词版。要让它写成带判断的分析，加这几项：
+
+| 名称 | 类型 | 例子 |
+| --- | --- | --- |
+| `AI_API_KEY` | Secret | `sk-...` |
+| `AI_BASE_URL` | Variable | `https://api.deepseek.com/v1` |
+| `AI_MODEL` | Variable | `deepseek-chat` |
+| `AI_PROVIDER` | Variable（可省） | `openai` |
+
+常见 OpenAI 兼容服务：
+
+| 服务 | AI_BASE_URL | AI_MODEL |
+| --- | --- | --- |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
+| 通义千问（百炼） | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
+| 魔搭 ModelScope | `https://api-inference.modelscope.cn/v1` | `Qwen/Qwen2.5-7B-Instruct` |
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
+
+AI 调用失败（超时、额度、网络）时会自动回退成关键词版日报并照常发信，不会漏。
+`AI_PROVIDER=github-models` 也支持，但 2026-10 实测 `models.github.ai` 只返回占位响应，
+这条路径暂时不可用。
 
 几点要知道的：
 
