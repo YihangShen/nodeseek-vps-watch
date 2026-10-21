@@ -42,6 +42,8 @@ def make_feed(items):
 class FakeResponse:
     """模拟 urllib 的返回对象，用于测试 AI 摘要解析。"""
 
+    status = 200
+
     def __init__(self, payload):
         self.payload = payload
 

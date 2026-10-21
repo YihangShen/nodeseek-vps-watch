@@ -698,6 +698,23 @@ def build_ai_prompt(hits: list[dict], window: str) -> str:
     return "\n".join(lines)
 
 
+def http_post_json(url: str, payload: dict, headers: dict, timeout: int) -> tuple[int, str]:
+    """POST JSON，返回 (状态码, 响应文本)。HTTP 错误也把响应体带回来，方便定位。"""
+    request = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as resp:
+            return resp.status, resp.read().decode("utf-8", "ignore")
+    except urllib.error.HTTPError as exc:
+        try:
+            return exc.code, exc.read().decode("utf-8", "ignore")
+        except Exception:  # noqa: BLE001 - 读错误体失败不影响回退
+            return exc.code, ""
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return 0, f"{type(exc).__name__}: {exc}"
+
+
 def ai_summary(cfg: dict, hits: list[dict], window: str) -> Optional[str]:
     """调用 OpenAI 兼容接口写日报。
 
@@ -730,47 +747,27 @@ def ai_summary(cfg: dict, hits: list[dict], window: str) -> Optional[str]:
         ],
     }
 
-    try:
-        request = urllib.request.Request(
-            f"{base_url}/chat/completions",
-            data=json.dumps(chat_payload).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        content = (data["choices"][0]["message"]["content"] or "").strip()
-        if content:
-            return content
-        log("AI 返回空内容，回退到普通日报")
-        return None
-    except urllib.error.HTTPError as exc:
-        detail = ""
+    status, raw = http_post_json(f"{base_url}/chat/completions", chat_payload, headers, timeout)
+    content = ""
+    if status == 200:
         try:
-            detail = exc.read().decode("utf-8", "ignore")[:200]
-        except Exception:  # noqa: BLE001 - 读错误体失败不影响回退
-            detail = ""
-        log(f"/chat/completions 返回 {exc.code}，尝试 /responses：{detail}")
-    except Exception as exc:  # noqa: BLE001 - 摘要失败不能影响日报投递
-        log(f"AI 摘要失败: {type(exc).__name__}: {exc}")
-        return None
+            content = (json.loads(raw)["choices"][0]["message"]["content"] or "").strip()
+        except Exception:  # noqa: BLE001 - 结构不符时统一走回退
+            content = ""
+    if content:
+        return content
+    log(f"/chat/completions 不可用（HTTP {status}）：{raw[:300]}")
 
     responses_payload = {"model": model, "instructions": system_prompt, "input": user_prompt}
-    try:
-        request = urllib.request.Request(
-            f"{base_url}/responses",
-            data=json.dumps(responses_payload).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        content = extract_responses_text(data)
-    except Exception as exc:  # noqa: BLE001 - 同上
-        log(f"AI 摘要失败: {type(exc).__name__}: {exc}")
-        return None
+    status, raw = http_post_json(f"{base_url}/responses", responses_payload, headers, timeout)
+    content = ""
+    if status == 200:
+        try:
+            content = extract_responses_text(json.loads(raw))
+        except Exception:  # noqa: BLE001 - 同上
+            content = ""
     if not content:
-        log("AI 返回空内容，回退到普通日报")
+        log(f"/responses 也不可用（HTTP {status}）：{raw[:300]}，回退到关键词日报")
         return None
     return content
 
