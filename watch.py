@@ -87,6 +87,12 @@ DEFAULT_CONFIG = {
             "西雅图", "seattle", "波特兰", "portland", "硅谷", "santa clara",
             "弗里蒙特", "fremont", "圣克拉拉", "us west", "uswest", "美国西",
         ],
+        # needs：用户画像相关（联通友好、IP 质量、AI 解锁），只加分，不单独构成告警
+        "needs": [
+            "解锁", "原生", "ip干净", "ip 干净", "新ip段", "新段", "ip质量", "纯净",
+            "chatgpt", "claude", "gemini", "openai", "netflix", "disney", "流媒体",
+            "联通", "家宽", "tri",
+        ],
         "deal_actions": [
             "抢购", "补货", "上架", "开抢", "开售", "放货", "到货", "库存", "限量",
             "上线", "发售", "预售", "优惠", "促销", "活动", "特价", "折扣", "年付",
@@ -110,7 +116,11 @@ GROUP_WEIGHTS = {
     "deal_actions": (4, 1),
     "routes": (3, 1),
     "regions": (2, 1),
+    "needs": (2, 1),
 }
+
+# 只有这几组命中才算「跟美西线路机有关」，needs 只用来加权
+TOPICAL_GROUPS = ("brands", "routes", "regions")
 
 
 def log(msg: str) -> None:
@@ -224,9 +234,30 @@ def fetch_feed(retries: int = 3) -> bytes:
     raise RuntimeError(f"拉取 RSS 失败: {last_error}")
 
 
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\[[0-9]{1,2}(?:;[0-9]{1,2})*m")
+JUNK_RE = re.compile(r"[\\/`^_~|]{3,}")
+
+
+def clean_text(text: str) -> str:
+    """清掉终端转义码和测速报告的乱码，RSS 摘要里经常混着这些。"""
+    text = ANSI_RE.sub(" ", text or "")
+    text = JUNK_RE.sub(" ", text)
+    text = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def is_meaningful(text: str) -> bool:
+    """摘要太短或基本是符号的就不要放进邮件。"""
+    text = (text or "").strip()
+    if len(text) < 8:
+        return False
+    useful = sum(1 for ch in text if ch.isalnum() or "\u4e00" <= ch <= "\u9fff")
+    return useful / len(text) >= 0.5
+
+
 def strip_html(text: str) -> str:
     text = re.sub(r"<[^>]+>", " ", text or "")
-    return re.sub(r"\s+", " ", html.unescape(text)).strip()
+    return clean_text(html.unescape(text))
 
 
 def parse_feed(payload: bytes) -> list[dict]:
@@ -272,7 +303,7 @@ def score_item(item: dict, rules: dict) -> tuple[int, list[str], bool]:
     matched: list[str] = []
     topical = False
 
-    for group in ("brands", "deal_actions", "routes", "regions"):
+    for group in GROUP_WEIGHTS:
         title_weight, body_weight = GROUP_WEIGHTS[group]
         best = 0
         for keyword in rules.get(group, []):
@@ -283,7 +314,7 @@ def score_item(item: dict, rules: dict) -> tuple[int, list[str], bool]:
             elif kw in body:
                 best = max(best, body_weight)
                 matched.append(f"{keyword}(正文)")
-            if best and group in ("brands", "routes", "regions"):
+            if best and group in TOPICAL_GROUPS:
                 topical = True
         score += best
 
@@ -325,7 +356,45 @@ def format_time(value: Optional[str]) -> str:
         return value
 
 
-def keyword_line(item: dict) -> str:
+GROUP_LABELS = {
+    "brands": "厂商",
+    "routes": "线路",
+    "regions": "地区",
+    "deal_actions": "动作",
+    "needs": "你的需求",
+    "penalty": "注意",
+}
+
+
+def group_hits(item: dict, rules: dict) -> dict:
+    """按组收集命中关键词，邮件里就能写成「线路 CN2 GIA · 地区 洛杉矶」。"""
+    title = (item.get("title") or "").lower()
+    body = (item.get("description") or "").lower()
+    out = {}
+    for group in list(GROUP_WEIGHTS) + ["penalty"]:
+        words = []
+        for keyword in rules.get(group, []):
+            kw = keyword.lower()
+            if kw in title:
+                words.append(keyword)
+            elif kw in body:
+                words.append(f"{keyword}(摘要)")
+        if words:
+            out[group] = words[:5]
+    return out
+
+
+def why_line(item: dict) -> str:
+    groups = item.get("groups") or {}
+    if groups:
+        parts = []
+        for group, words in groups.items():
+            label = GROUP_LABELS.get(group, group)
+            if group == "penalty":
+                parts.append("注意 " + "/".join(w.lstrip("-") for w in words))
+            else:
+                parts.append(f"{label} " + " / ".join(words))
+        return " · ".join(parts)
     parts = list(item.get("matched", [])[:8])
     negatives = item.get("negatives") or []
     if negatives:
@@ -333,46 +402,100 @@ def keyword_line(item: dict) -> str:
     return " ".join(parts)
 
 
+def split_tiers(items: list[dict]) -> tuple[list[dict], list[dict]]:
+    hot, warm = [], []
+    for item in items:
+        if item.get("instant") or int(item.get("score") or 0) >= 12:
+            hot.append(item)
+        else:
+            warm.append(item)
+    return hot, warm
+
+
+def readable_summary(item: dict, limit: int = 180) -> str:
+    text = clean_text(item.get("description") or "")
+    if not is_meaningful(text):
+        return ""
+    return text[:limit]
+
+
 def render_rows(items: list[dict]) -> str:
     rows = []
     for item in items:
         meta = " · ".join(
-            part for part in [item.get("category", ""), format_time(item.get("published")), item.get("author", "")] if part
+            part
+            for part in [
+                format_time(item.get("published")),
+                item.get("category", ""),
+                item.get("author", ""),
+                f"评分 {item.get('score')}" if item.get("score") is not None else "",
+            ]
+            if part
+        )
+        summary = readable_summary(item)
+        summary_html = (
+            f'<div style="color:#374151;font-size:13px;margin-top:6px">{html.escape(summary)}</div>' if summary else ""
         )
         rows.append(
             f"""<tr>
-  <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;vertical-align:top">
-    <a href="{html.escape(item['link'])}" style="color:#1d4ed8;text-decoration:none;font-weight:600">{html.escape(item['title'])}</a>
-    <div style="color:#6b7280;font-size:12px;margin-top:4px">{html.escape(meta)} {html.escape(keyword_line(item))}</div>
-    <div style="color:#374151;font-size:13px;margin-top:6px">{html.escape((item.get('description') or '')[:220])}</div>
+  <td style="padding:12px;border-bottom:1px solid #e5e7eb;vertical-align:top">
+    <a href="{html.escape(item['link'])}" style="color:#1d4ed8;text-decoration:none;font-weight:600;font-size:14px">{html.escape(item['title'])}</a>
+    <div style="color:#b45309;font-size:12px;margin-top:5px">{html.escape(why_line(item))}</div>
+    {summary_html}
+    <div style="color:#9ca3af;font-size:12px;margin-top:6px">{html.escape(meta)}</div>
   </td>
 </tr>"""
         )
     return "".join(rows)
 
 
+def render_section(title: str, items: list[dict], accent: str) -> str:
+    if not items:
+        return ""
+    return (
+        f'<h3 style="font-size:14px;color:{accent};margin:18px 0 8px">{html.escape(title)}（{len(items)} 条）</h3>'
+        f'<table style="width:100%;border-collapse:collapse;background:#fff;border:1px solid #e5e7eb">{render_rows(items)}</table>'
+    )
+
+
 def render_html(items: list[dict], title: str, intro: str = "") -> str:
+    hot, warm = split_tiers(items)
     return f"""<html><body style="margin:0;background:#f9fafb;font-family:-apple-system,'PingFang SC','Helvetica Neue',Arial,sans-serif">
 <div style="max-width:680px;margin:0 auto;padding:20px">
   <h2 style="font-size:17px;color:#111827;margin:0 0 6px">{html.escape(title)}</h2>
   <p style="color:#6b7280;font-size:13px;margin:0 0 14px">{html.escape(intro)}</p>
-  <table style="width:100%;border-collapse:collapse;background:#fff;border:1px solid #e5e7eb">{render_rows(items)}</table>
+  {render_section("值得立刻看", hot, "#b91c1c")}
+  {render_section("可以慢慢看", warm, "#1d4ed8")}
   <p style="color:#9ca3af;font-size:12px;margin-top:14px">来源：NodeSeek 公开 RSS · nodeseek-vps-watch</p>
 </div></body></html>"""
 
 
 def render_text(items: list[dict], title: str, intro: str = "") -> str:
+    hot, warm = split_tiers(items)
     lines = [title, intro, ""]
-    for item in items:
-        meta = " · ".join(
-            part for part in [item.get("category", ""), format_time(item.get("published")), item.get("author", "")] if part
-        )
-        lines.append(f"- [{item.get('score')}] {item['title']}")
-        lines.append(f"  {meta} {keyword_line(item)}")
-        lines.append(f"  {item['link']}")
-        if item.get("description"):
-            lines.append(f"  {item['description'][:200]}")
-        lines.append("")
+    for section, group in (("值得立刻看", hot), ("可以慢慢看", warm)):
+        if not group:
+            continue
+        lines.append(f"== {section}（{len(group)} 条）==")
+        for item in group:
+            meta = " · ".join(
+                part
+                for part in [
+                    format_time(item.get("published")),
+                    item.get("category", ""),
+                    item.get("author", ""),
+                    f"评分 {item.get('score')}",
+                ]
+                if part
+            )
+            lines.append(f"- {item['title']}")
+            lines.append(f"  {why_line(item)}")
+            summary = readable_summary(item)
+            if summary:
+                lines.append(f"  {summary}")
+            lines.append(f"  {meta}")
+            lines.append(f"  {item['link']}")
+            lines.append("")
     return "\n".join(lines)
 
 
@@ -458,28 +581,45 @@ def recent_gaps(state: dict, since: Optional[str], threshold: int) -> list[int]:
 
 
 AI_SYSTEM_PROMPT = (
-    "你是 VPS 情报助手，帮用户筛选美西、优质线路（CN2 GIA / CMIN2 / 9929 / 4837 / 三网优化等）的机器。"
-    "只使用用户给出的信息，绝对不要编造价格、库存、优惠码或机房信息；信息不足时明确写「需点开确认」。"
-    "请按「值得立刻看」和「可以慢慢看」两类输出，每条写清楚厂商、机房或地区、线路、价格（如有）和链接。"
-    "开头用一句话总结今天有没有值得抢的东西。中文，简洁，不要客套话，总长度控制在 400 字以内。"
+    "你在帮一位中国大陆用户盯美西 VPS 情报，产出每天一封的中文分析邮件。\n"
+    "用户画像：中国大陆家宽；只要美西，洛杉矶优先；回程要对联通友好"
+    "（9929 / AS9929、CMIN2、CN2 GIA、DC6、DC9 都算好，4837 次之）；"
+    "非常看重 IP 质量，希望是原生或干净 IP，能解锁 ChatGPT、Claude、Gemini、Netflix 等主流服务；"
+    "带宽和流量不用很大但不能是小口子，参考定位是 VMISS LA TRI Basic 这类 1C1G / 500GB 套餐；"
+    "不追高溢价的二手转让。\n"
+    "输出结构：\n"
+    "1) 第一句话直接给结论：今天有没有值得下手的东西，值不值得现在行动。\n"
+    "2) 分三段写：「值得立刻看」「可以慢慢看」「可以忽略」，没有内容就写「无」。\n"
+    "3) 每条写：厂商、机房或地区、线路、配置或价格（原文有才写）、为什么适合这位用户、风险或不确定点、链接。\n"
+    "4) 结尾单独一段「需要你点开确认」：IP 是否原生、AI 服务解锁实测、当前库存和价格，"
+    "这些 RSS 摘要里看不到。\n"
+    "5) 如果整天只有讨论帖、没有可下单或补货的信息，就直接说明「今天没有可直接购买的机会」。\n"
+    "硬性要求：只使用给你的信息，绝不编造价格、库存、优惠码、机房或解锁结论；"
+    "摘要里的测速报告、终端乱码可以忽略。中文，不要客套话，全文 600 字以内。"
 )
 
 
 def build_ai_prompt(hits: list[dict], window: str) -> str:
-    lines = [f"统计区间：{window}", f"命中条数：{len(hits)}", ""]
+    lines = [
+        f"统计区间：{window}",
+        f"命中条数：{len(hits)}",
+        "说明：摘要来自 NodeSeek RSS，可能夹带测速报告和乱码，仅供参考；价格、库存、IP 解锁情况一律以帖子为准。",
+        "",
+    ]
     for index, hit in enumerate(hits, 1):
         lines.append(f"{index}. {hit.get('title', '')}")
         lines.append(
-            "   分类：{} 时间：{} 作者：{} 评分：{} 命中词：{}".format(
+            "   分类：{} 时间：{} 作者：{} 评分：{} 命中：{}".format(
                 hit.get("category", ""),
                 format_time(hit.get("published")),
                 hit.get("author", ""),
                 hit.get("score", ""),
-                " ".join(hit.get("matched", [])[:6]),
+                why_line(hit),
             )
         )
-        if hit.get("description"):
-            lines.append(f"   摘要：{hit['description'][:300]}")
+        summary = readable_summary(hit, 300)
+        if summary:
+            lines.append(f"   摘要：{summary}")
         lines.append(f"   链接：{hit.get('link', '')}")
     return "\n".join(lines)
 
@@ -609,6 +749,7 @@ def command_run(cfg: dict, dry_run: bool = False) -> int:
                         "score": score,
                         "matched": [m for m in matched if not m.startswith("-")],
                         "negatives": [m for m in matched if m.startswith("-")],
+                        "groups": group_hits(item, cfg["rules"]),
                         "detected_at": now_iso,
                         "instant": is_instant(item, score, cfg),
                     }
@@ -720,13 +861,20 @@ def command_digest(
             text_body = f"{summary}\n\n---- 原始命中 ----\n{raw_list}"
             if gap_links:
                 text_body += "\n\n可能漏掉的帖子：\n" + "\n".join(gap_links)
+            hot, warm = split_tiers(hits)
+            sections = render_section("值得立刻看", hot, "#b91c1c") + render_section("可以慢慢看", warm, "#1d4ed8")
+            gap_block = ""
+            if gap_links:
+                links_html = " ".join(f'<a href="{html.escape(link)}">{html.escape(link)}</a>' for link in gap_links[:20])
+                gap_block = f'<p style="color:#6b7280;font-size:13px;margin-top:14px">可能漏掉的帖子：{links_html}</p>'
             html_body = (
                 "<html><body style=\"margin:0;background:#f9fafb;font-family:-apple-system,'PingFang SC',Arial,sans-serif;color:#111827\">"
                 "<div style=\"max-width:680px;margin:0 auto;padding:20px\">"
                 f"<h2 style=\"font-size:17px;margin:0 0 6px\">{html.escape(subject)}</h2>"
                 f"<p style=\"color:#6b7280;font-size:13px;margin:0 0 14px\">{html.escape(intro)}</p>"
                 f"<div style=\"font-size:14px;line-height:1.7;white-space:pre-wrap\">{html.escape(summary)}</div>"
-                f"<table style=\"width:100%;border-collapse:collapse;background:#fff;border:1px solid #e5e7eb;margin-top:16px\">{render_rows(hits)}</table>"
+                f"{sections}"
+                f"{gap_block}"
                 "<p style=\"color:#9ca3af;font-size:12px;margin-top:14px\">来源：NodeSeek 公开 RSS · nodeseek-vps-watch</p>"
                 "</div></body></html>"
             )

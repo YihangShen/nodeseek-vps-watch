@@ -198,6 +198,10 @@ systemctl --user enable --now nodeseek-vps-watch.timer
 | 抢购动作（`deal_actions`） | 4 | 1 |
 | 线路（`routes`） | 3 | 1 |
 | 地区（`regions`） | 2 | 1 |
+| 需求画像（`needs`） | 2 | 1 |
+
+`needs` 放的是买家画像相关的词（解锁、原生、IP 干净、联通、流媒体、TRI 等），只加分，
+不单独构成告警；`brands` / `routes` / `regions` 命中任意一组才算跟线路机有关。
 
 附加规则：分类为 `info` 加 1 分，标题含「优惠 / 促销」加 1 分。
 另外两组过滤词：

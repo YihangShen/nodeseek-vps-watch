@@ -109,6 +109,52 @@ class WatchTestCase(unittest.TestCase):
     def test_strip_html_removes_markup(self):
         self.assertEqual(watch.strip_html("<p>hello   <b>world</b></p>"), "hello world")
 
+    def test_clean_text_removes_ansi_and_artifacts(self):
+        raw = "\x1b[31;1m未检测基本信息\x1b[0m [33;0m \\\\///''' " + "." * 20
+        cleaned = watch.clean_text(raw)
+        self.assertNotIn("\x1b", cleaned)
+        self.assertNotIn("[31;1m", cleaned)
+        self.assertNotIn("[33;0m", cleaned)
+        self.assertIn("未检测基本信息", cleaned)
+        self.assertNotIn("\\\\", cleaned)
+
+    def test_is_meaningful_filters_junk(self):
+        self.assertFalse(watch.is_meaningful("rt"))
+        self.assertFalse(watch.is_meaningful(""))
+        self.assertFalse(watch.is_meaningful("\\\\///'''.,,,'"))
+        self.assertTrue(watch.is_meaningful("洛杉矶 9929 线路机，原生 IP 可以解锁 AI 服务"))
+
+    def test_split_tiers_puts_instant_and_high_score_first(self):
+        hits = [
+            {"title": "a", "instant": True, "score": 9},
+            {"title": "b", "instant": False, "score": 12},
+            {"title": "c", "instant": False, "score": 7},
+        ]
+        hot, warm = watch.split_tiers(hits)
+        self.assertEqual([h["title"] for h in hot], ["a", "b"])
+        self.assertEqual([h["title"] for h in warm], ["c"])
+
+    def test_why_line_labels_groups(self):
+        item = {
+            "title": "VMISS 美西 CN2 GIA 补货",
+            "groups": {"routes": ["cn2 gia"], "regions": ["洛杉矶"], "penalty": ["-溢价"]},
+        }
+        line = watch.why_line(item)
+        self.assertIn("线路 cn2 gia", line)
+        self.assertIn("地区 洛杉矶", line)
+        self.assertIn("注意 溢价", line)
+
+    def test_group_hits_collects_keywords_by_group(self):
+        item = {
+            "title": "VMISS 美西 CN2 GIA 补货 新IP段",
+            "description": "三网优化，1C1G 500GB，能解锁 ChatGPT",
+        }
+        groups = watch.group_hits(item, self.cfg["rules"])
+        self.assertIn("vmiss", groups["brands"])
+        self.assertIn("cn2 gia", groups["routes"])
+        self.assertIn("补货", groups["deal_actions"])
+        self.assertTrue(any(word.startswith("解锁") for word in groups["needs"]))
+
     def test_score_prefers_title_and_caps_group(self):
         item = {"title": "VMISS 美西 CN2 GIA 补货", "description": "", "category": "daily"}
         score, matched, topical = watch.score_item(item, self.cfg["rules"])
