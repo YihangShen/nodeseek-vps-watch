@@ -814,26 +814,19 @@ def command_digest(
         print(json.dumps({"since": since, "hits": hits, "missed": gap_links}, ensure_ascii=False, indent=2))
         return 0
 
+    window = format_time(since) if since else "最早记录"
     if print_only:
         if not hits and not gap_links:
             print("无新的命中记录")
             return 0
-        for hit in hits:
-            print(
-                f"[{hit.get('score')}] {hit.get('title')} | {hit.get('category')} | "
-                f"{format_time(hit.get('published'))} | {hit.get('link')}"
-            )
-            if hit.get("description"):
-                print(f"    {hit['description'][:180]}")
-            if hit.get("negatives"):
-                print(f"    注意：{'/'.join(n.lstrip('-') for n in hit['negatives'])}")
+        if hits:
+            print(render_text(hits, f"统计区间起于 {window}", f"共 {len(hits)} 条命中").strip())
         if gap_links:
             print("\n可能漏掉的帖子：")
             for link in gap_links[:20]:
                 print(f"  {link}")
         return 0
 
-    window = format_time(since) if since else "最早记录"
     if not hits and not gap_links and not cfg.get("digest_even_if_empty", True):
         print("无新的命中记录")
         return 0
