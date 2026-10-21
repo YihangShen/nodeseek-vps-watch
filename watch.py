@@ -222,6 +222,8 @@ def apply_env_overrides(cfg: dict) -> dict:
     if to:
         smtp["to"] = [addr.strip() for addr in to.replace(";", ",").split(",") if addr.strip()]
         smtp_from_env = True
+    if not smtp.get("from") and smtp.get("username"):
+        smtp["from"] = smtp["username"]
     if not smtp.get("enabled") and env("SMTP_ENABLED"):
         smtp["enabled"] = str(env("SMTP_ENABLED")).lower() in ("1", "true", "yes", "on")
     # Actions 里只给了 Secrets，不再要求额外配一个开关
