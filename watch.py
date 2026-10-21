@@ -50,6 +50,13 @@ DEFAULT_CONFIG = {
     "history_limit": 20000,
     "gap_report_threshold": 3,
     "digest_even_if_empty": True,
+    "ai": {
+        "enabled": False,
+        "base_url": "https://api.openai.com/v1",
+        "model": "",
+        "api_key": "",
+        "timeout": 60,
+    },
     "smtp": {
         "enabled": False,
         "host": "smtp.qq.com",
@@ -326,7 +333,7 @@ def keyword_line(item: dict) -> str:
     return " ".join(parts)
 
 
-def render_html(items: list[dict], title: str, intro: str = "") -> str:
+def render_rows(items: list[dict]) -> str:
     rows = []
     for item in items:
         meta = " · ".join(
@@ -341,11 +348,15 @@ def render_html(items: list[dict], title: str, intro: str = "") -> str:
   </td>
 </tr>"""
         )
+    return "".join(rows)
+
+
+def render_html(items: list[dict], title: str, intro: str = "") -> str:
     return f"""<html><body style="margin:0;background:#f9fafb;font-family:-apple-system,'PingFang SC','Helvetica Neue',Arial,sans-serif">
 <div style="max-width:680px;margin:0 auto;padding:20px">
   <h2 style="font-size:17px;color:#111827;margin:0 0 6px">{html.escape(title)}</h2>
   <p style="color:#6b7280;font-size:13px;margin:0 0 14px">{html.escape(intro)}</p>
-  <table style="width:100%;border-collapse:collapse;background:#fff;border:1px solid #e5e7eb">{''.join(rows)}</table>
+  <table style="width:100%;border-collapse:collapse;background:#fff;border:1px solid #e5e7eb">{render_rows(items)}</table>
   <p style="color:#9ca3af;font-size:12px;margin-top:14px">来源：NodeSeek 公开 RSS · nodeseek-vps-watch</p>
 </div></body></html>"""
 
@@ -446,6 +457,72 @@ def recent_gaps(state: dict, since: Optional[str], threshold: int) -> list[int]:
     return sorted(set(ids))
 
 
+AI_SYSTEM_PROMPT = (
+    "你是 VPS 情报助手，帮用户筛选美西、优质线路（CN2 GIA / CMIN2 / 9929 / 4837 / 三网优化等）的机器。"
+    "只使用用户给出的信息，绝对不要编造价格、库存、优惠码或机房信息；信息不足时明确写「需点开确认」。"
+    "请按「值得立刻看」和「可以慢慢看」两类输出，每条写清楚厂商、机房或地区、线路、价格（如有）和链接。"
+    "开头用一句话总结今天有没有值得抢的东西。中文，简洁，不要客套话，总长度控制在 400 字以内。"
+)
+
+
+def build_ai_prompt(hits: list[dict], window: str) -> str:
+    lines = [f"统计区间：{window}", f"命中条数：{len(hits)}", ""]
+    for index, hit in enumerate(hits, 1):
+        lines.append(f"{index}. {hit.get('title', '')}")
+        lines.append(
+            "   分类：{} 时间：{} 作者：{} 评分：{} 命中词：{}".format(
+                hit.get("category", ""),
+                format_time(hit.get("published")),
+                hit.get("author", ""),
+                hit.get("score", ""),
+                " ".join(hit.get("matched", [])[:6]),
+            )
+        )
+        if hit.get("description"):
+            lines.append(f"   摘要：{hit['description'][:300]}")
+        lines.append(f"   链接：{hit.get('link', '')}")
+    return "\n".join(lines)
+
+
+def ai_summary(cfg: dict, hits: list[dict], window: str) -> Optional[str]:
+    """调用 OpenAI 兼容的 chat/completions 接口写日报，失败时返回 None 由调用方回退。"""
+    ai = cfg.get("ai") or {}
+    if not ai.get("enabled"):
+        return None
+    api_key = ai.get("api_key") or os.environ.get("NODESEEK_AI_KEY", "")
+    model = ai.get("model")
+    if not api_key or not model:
+        log("AI 摘要已启用但缺少 api_key 或 model，回退到普通日报")
+        return None
+    base_url = (ai.get("base_url") or "https://api.openai.com/v1").rstrip("/")
+    payload = {
+        "model": model,
+        "temperature": 0.3,
+        "messages": [
+            {"role": "system", "content": AI_SYSTEM_PROMPT},
+            {"role": "user", "content": build_ai_prompt(hits, window)},
+        ],
+    }
+    request = urllib.request.Request(
+        f"{base_url}/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "User-Agent": UA,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=int(ai.get("timeout", 60))) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        content = (data["choices"][0]["message"]["content"] or "").strip()
+    except Exception as exc:  # noqa: BLE001 - 摘要失败不能影响日报投递
+        log(f"AI 摘要失败: {type(exc).__name__}: {exc}")
+        return None
+    return content or None
+
+
 def command_run(cfg: dict, dry_run: bool = False) -> int:
     state = load_state()
     seen = set(state.get("seen", []))
@@ -529,6 +606,7 @@ def command_digest(
     as_json: bool = False,
     hours: Optional[int] = None,
     state: Optional[dict] = None,
+    use_ai: bool = False,
 ) -> int:
     state = state if state is not None else load_state()
     since = state.get("last_digest")
@@ -583,10 +661,28 @@ def command_digest(
         intro = f"统计区间起于 {window}"
         if gap_links:
             intro += f" · 另有 {len(gap_links)} 条帖子可能落在 RSS 窗口之外"
-        text_body = render_text(hits, subject, intro)
-        if gap_links:
-            text_body += "\n可能漏掉的帖子：\n" + "\n".join(gap_links)
-        html_body = render_html(hits, subject, intro)
+        summary = ai_summary(cfg, hits, window) if use_ai else None
+        if summary:
+            subject = f"NodeSeek 美西 VPS 日报（{len(hits)} 条）"
+            raw_list = render_text(hits, "", "").strip()
+            text_body = f"{summary}\n\n---- 原始命中 ----\n{raw_list}"
+            if gap_links:
+                text_body += "\n\n可能漏掉的帖子：\n" + "\n".join(gap_links)
+            html_body = (
+                "<html><body style=\"margin:0;background:#f9fafb;font-family:-apple-system,'PingFang SC',Arial,sans-serif;color:#111827\">"
+                "<div style=\"max-width:680px;margin:0 auto;padding:20px\">"
+                f"<h2 style=\"font-size:17px;margin:0 0 6px\">{html.escape(subject)}</h2>"
+                f"<p style=\"color:#6b7280;font-size:13px;margin:0 0 14px\">{html.escape(intro)}</p>"
+                f"<div style=\"font-size:14px;line-height:1.7;white-space:pre-wrap\">{html.escape(summary)}</div>"
+                f"<table style=\"width:100%;border-collapse:collapse;background:#fff;border:1px solid #e5e7eb;margin-top:16px\">{render_rows(hits)}</table>"
+                "<p style=\"color:#9ca3af;font-size:12px;margin-top:14px\">来源：NodeSeek 公开 RSS · nodeseek-vps-watch</p>"
+                "</div></body></html>"
+            )
+        else:
+            text_body = render_text(hits, subject, intro)
+            if gap_links:
+                text_body += "\n\n可能漏掉的帖子：\n" + "\n".join(gap_links)
+            html_body = render_html(hits, subject, intro)
 
     ok = send_mail(cfg, subject, html_body, text_body)
     if ok:
@@ -644,6 +740,7 @@ def build_parser() -> argparse.ArgumentParser:
     digest_parser.add_argument("--print", dest="print_only", action="store_true", help="只打印，不发邮件")
     digest_parser.add_argument("--json", dest="as_json", action="store_true", help="输出 JSON")
     digest_parser.add_argument("--hours", type=int, help="覆盖统计窗口（小时）")
+    digest_parser.add_argument("--ai", action="store_true", help="命中时调用配置的 AI 接口生成摘要")
 
     send_parser = sub.add_parser("send", help="发送自定义邮件")
     send_parser.add_argument("--subject", required=True)
@@ -664,7 +761,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         with SingleInstance(LOCK_PATH):
             return command_run(cfg, dry_run=args.dry_run)
     if args.command == "digest":
-        return command_digest(cfg, print_only=args.print_only, as_json=args.as_json, hours=args.hours)
+        return command_digest(
+            cfg, print_only=args.print_only, as_json=args.as_json, hours=args.hours, use_ai=args.ai
+        )
     if args.command == "send":
         return command_send(cfg, args.subject, args.body_file, args.text, args.html_file)
     if args.command == "status":

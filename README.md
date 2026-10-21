@@ -155,6 +155,39 @@ systemctl --user enable --now nodeseek-vps-watch.timer
 > 没有命中就保持安静。有命中时按「值得立刻看 / 可以慢慢看」分类，用中文写一封简短邮件，
 > 价格和库存只能引用摘要里出现过的内容，最后用 `watch.py send` 发出。
 
+### 让日报自带 AI 摘要
+
+想让每天那封邮件本身就用模型写成判断，而不是关键词列表，可以在 `config.json` 里打开 `ai`：
+
+```json
+{
+  "ai": {
+    "enabled": true,
+    "base_url": "https://api.deepseek.com/v1",
+    "model": "deepseek-chat",
+    "api_key": "sk-...",
+    "timeout": 60
+  }
+}
+```
+
+任何 OpenAI 兼容的 `POST /chat/completions` 接口都能用：
+
+| 服务 | base_url | 模型示例 |
+| --- | --- | --- |
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
+| 阿里云百炼（通义） | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
+| Moonshot | `https://api.moonshot.cn/v1` | `moonshot-v1-8k` |
+| 本地 Ollama | `http://127.0.0.1:11434/v1` | `qwen2.5:7b` |
+
+几点说明：
+
+- **只有 `digest` 会调用 AI**，每分钟的轮询不发任何 API 请求，所以一天最多一次调用
+- 调用失败、超时、没配 key 都会自动回退到普通关键词日报，不会漏发邮件
+- key 也可以放环境变量 `NODESEEK_AI_KEY`，避免写进配置文件
+- 提示词已固定要求「信息不足就写需要点开确认」，模型不会替你编价格和库存
+
 ## 评分规则
 
 同一组关键词只取最高权重，避免同义词堆叠把分数刷高：

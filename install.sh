@@ -113,7 +113,7 @@ if [ -n "$DIGEST_TIME" ]; then
   cat > "$TARGET_DIR/digest.sh" <<EOF
 #!/bin/sh
 cd "$TARGET_DIR" || exit 1
-exec "$PYTHON_BIN" watch.py digest
+exec "$PYTHON_BIN" watch.py digest --ai
 EOF
   chmod +x "$TARGET_DIR/digest.sh"
 fi

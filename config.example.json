@@ -4,6 +4,13 @@
   "history_limit": 20000,
   "gap_report_threshold": 3,
   "digest_even_if_empty": true,
+  "ai": {
+    "enabled": false,
+    "base_url": "https://api.openai.com/v1",
+    "model": "",
+    "api_key": "",
+    "timeout": 60
+  },
   "smtp": {
     "enabled": false,
     "host": "smtp.qq.com",

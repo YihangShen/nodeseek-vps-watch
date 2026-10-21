@@ -2,8 +2,10 @@
 
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +35,22 @@ def make_feed(items):
         )
     parts.append("</channel></rss>")
     return "".join(parts).encode("utf-8")
+
+
+class FakeResponse:
+    """模拟 urllib 的返回对象，用于测试 AI 摘要解析。"""
+
+    def __init__(self, payload):
+        self.payload = payload
+
+    def read(self):
+        return json.dumps(self.payload).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
 
 
 DEAL_POST = (
@@ -205,6 +223,83 @@ class WatchTestCase(unittest.TestCase):
         state = {"last_digest": None, "seen": [], "max_id": 0}
         self.assertEqual(watch.command_digest(self.cfg, state=state), 0)
         self.assertIsNone(state["last_digest"])
+
+    def test_ai_summary_disabled_by_default(self):
+        self.assertIsNone(watch.ai_summary(self.cfg, [{"title": "x"}], "10-21"))
+
+    def test_ai_summary_skips_without_api_key(self):
+        cfg = watch.deep_merge(self.cfg, {"ai": {"enabled": True, "model": "test"}})
+        with mock.patch.dict(os.environ, {"NODESEEK_AI_KEY": ""}):
+            self.assertIsNone(watch.ai_summary(cfg, [{"title": "x"}], "10-21"))
+
+    def test_ai_summary_parses_chat_completion(self):
+        cfg = watch.deep_merge(self.cfg, {"ai": {"enabled": True, "model": "test-model", "api_key": "sk-test"}})
+        calls = {}
+
+        def fake_urlopen(request, timeout=None):
+            calls["url"] = request.full_url
+            calls["auth"] = request.headers.get("Authorization")
+            calls["body"] = json.loads(request.data.decode("utf-8"))
+            return FakeResponse({"choices": [{"message": {"content": "  今天有值得抢的机器  "}}]})
+
+        original = watch.urllib.request.urlopen
+        watch.urllib.request.urlopen = fake_urlopen
+        try:
+            text = watch.ai_summary(
+                cfg,
+                [{"title": "VMISS 美西 CN2 GIA 补货", "link": "https://example.com", "score": 16}],
+                "10-21 14:00",
+            )
+        finally:
+            watch.urllib.request.urlopen = original
+        self.assertEqual(text, "今天有值得抢的机器")
+        self.assertEqual(calls["url"], "https://api.openai.com/v1/chat/completions")
+        self.assertEqual(calls["auth"], "Bearer sk-test")
+        self.assertEqual(calls["body"]["model"], "test-model")
+        self.assertIn("VMISS", calls["body"]["messages"][1]["content"])
+
+    def test_ai_summary_falls_back_on_error(self):
+        cfg = watch.deep_merge(self.cfg, {"ai": {"enabled": True, "model": "test", "api_key": "sk-test"}})
+
+        def boom(request, timeout=None):
+            raise OSError("network down")
+
+        original = watch.urllib.request.urlopen
+        watch.urllib.request.urlopen = boom
+        try:
+            self.assertIsNone(watch.ai_summary(cfg, [{"title": "x"}], "10-21"))
+        finally:
+            watch.urllib.request.urlopen = original
+
+    def test_digest_uses_ai_summary_and_marks_state(self):
+        hit = {
+            "title": "VMISS 美西 CN2 GIA 补货",
+            "link": "https://www.nodeseek.com/post-1-1",
+            "category": "info",
+            "description": "三网优化，库存有限",
+            "matched": ["vmiss"],
+            "score": 16,
+            "detected_at": "2026-10-21T06:00:00+00:00",
+        }
+        watch.HITS_PATH.write_text(json.dumps(hit, ensure_ascii=False) + "\n", encoding="utf-8")
+        cfg = watch.deep_merge(self.cfg, {"ai": {"enabled": True, "model": "test", "api_key": "sk-test"}})
+        captured = {}
+
+        def fake_send(_cfg, subject, html_body, text_body):
+            captured.update(subject=subject, html=html_body, text=text_body)
+            return True
+
+        original_send, original_ai = watch.send_mail, watch.ai_summary
+        watch.send_mail = fake_send
+        watch.ai_summary = lambda _cfg, _hits, _window: "今天没有特别值得抢的机器。"
+        try:
+            state = {"last_digest": None, "seen": [], "max_id": 0}
+            self.assertEqual(watch.command_digest(cfg, state=state, use_ai=True), 0)
+        finally:
+            watch.send_mail, watch.ai_summary = original_send, original_ai
+        self.assertIn("今天没有特别值得抢的机器", captured["text"])
+        self.assertIn("VMISS", captured["text"])
+        self.assertIsNotNone(state["last_digest"])
 
     def test_render_html_escapes_content(self):
         item = {
