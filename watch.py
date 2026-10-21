@@ -248,7 +248,8 @@ def apply_env_overrides(cfg: dict) -> dict:
     provider_name = (ai.get("provider") or "openai").lower()
     if provider_name in ("github", "github-models", "github_models"):
         ai["provider"] = "github-models"
-        ai["base_url"] = ai.get("base_url") or "https://models.github.ai/inference"
+        if not ai.get("base_url") or ai.get("base_url") == DEFAULT_CONFIG["ai"]["base_url"]:
+            ai["base_url"] = "https://models.github.ai/inference"
         ai["api_key"] = ai.get("api_key") or env("GITHUB_TOKEN") or ""
         ai["model"] = ai.get("model") or "openai/gpt-4o-mini"
         ai["enabled"] = True
