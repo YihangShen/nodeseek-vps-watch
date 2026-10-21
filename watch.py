@@ -485,7 +485,11 @@ def build_ai_prompt(hits: list[dict], window: str) -> str:
 
 
 def ai_summary(cfg: dict, hits: list[dict], window: str) -> Optional[str]:
-    """调用 OpenAI 兼容的 chat/completions 接口写日报，失败时返回 None 由调用方回退。"""
+    """调用 OpenAI 兼容接口写日报。
+
+    先试 /chat/completions，端点不存在时回退到 /responses（部分网关只开了 Responses API）。
+    任何失败都返回 None，由调用方回退到关键词日报。
+    """
     ai = cfg.get("ai") or {}
     if not ai.get("enabled"):
         return None
@@ -495,32 +499,80 @@ def ai_summary(cfg: dict, hits: list[dict], window: str) -> Optional[str]:
         log("AI 摘要已启用但缺少 api_key 或 model，回退到普通日报")
         return None
     base_url = (ai.get("base_url") or "https://api.openai.com/v1").rstrip("/")
-    payload = {
+    timeout = int(ai.get("timeout", 60))
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "User-Agent": UA,
+    }
+    system_prompt = AI_SYSTEM_PROMPT
+    user_prompt = build_ai_prompt(hits, window)
+    chat_payload = {
         "model": model,
         "temperature": 0.3,
         "messages": [
-            {"role": "system", "content": AI_SYSTEM_PROMPT},
-            {"role": "user", "content": build_ai_prompt(hits, window)},
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
         ],
     }
-    request = urllib.request.Request(
-        f"{base_url}/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-            "User-Agent": UA,
-        },
-        method="POST",
-    )
+
     try:
-        with urllib.request.urlopen(request, timeout=int(ai.get("timeout", 60))) as resp:
+        request = urllib.request.Request(
+            f"{base_url}/chat/completions",
+            data=json.dumps(chat_payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         content = (data["choices"][0]["message"]["content"] or "").strip()
+        if content:
+            return content
+        log("AI 返回空内容，回退到普通日报")
+        return None
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", "ignore")[:200]
+        except Exception:  # noqa: BLE001 - 读错误体失败不影响回退
+            detail = ""
+        log(f"/chat/completions 返回 {exc.code}，尝试 /responses：{detail}")
     except Exception as exc:  # noqa: BLE001 - 摘要失败不能影响日报投递
         log(f"AI 摘要失败: {type(exc).__name__}: {exc}")
         return None
-    return content or None
+
+    responses_payload = {"model": model, "instructions": system_prompt, "input": user_prompt}
+    try:
+        request = urllib.request.Request(
+            f"{base_url}/responses",
+            data=json.dumps(responses_payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        content = extract_responses_text(data)
+    except Exception as exc:  # noqa: BLE001 - 同上
+        log(f"AI 摘要失败: {type(exc).__name__}: {exc}")
+        return None
+    if not content:
+        log("AI 返回空内容，回退到普通日报")
+        return None
+    return content
+
+
+def extract_responses_text(data: dict) -> str:
+    """从 Responses API 的返回里取正文，兼容 output_text 与 output[].content[].text。"""
+    direct = data.get("output_text")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+    chunks: list[str] = []
+    for item in data.get("output") or []:
+        for part in item.get("content") or []:
+            text = part.get("text")
+            if isinstance(text, str) and text.strip():
+                chunks.append(text.strip())
+    return "\n".join(chunks).strip()
 
 
 def command_run(cfg: dict, dry_run: bool = False) -> int:

@@ -1,10 +1,12 @@
 """watch.py 的单元测试：python3 -m unittest discover -s tests -v"""
 
 import importlib.util
+import io
 import json
 import os
 import tempfile
 import unittest
+import urllib.error
 from unittest import mock
 from pathlib import Path
 
@@ -270,6 +272,37 @@ class WatchTestCase(unittest.TestCase):
             self.assertIsNone(watch.ai_summary(cfg, [{"title": "x"}], "10-21"))
         finally:
             watch.urllib.request.urlopen = original
+
+    def test_ai_summary_falls_back_to_responses_endpoint(self):
+        cfg = watch.deep_merge(self.cfg, {"ai": {"enabled": True, "model": "test", "api_key": "sk-test"}})
+        calls = []
+
+        def fake_urlopen(request, timeout=None):
+            calls.append(request.full_url)
+            if request.full_url.endswith("/chat/completions"):
+                raise urllib.error.HTTPError(
+                    request.full_url, 404, "Not Found", {}, io.BytesIO(b'{"error":"no such route"}')
+                )
+            return FakeResponse({"output": [{"content": [{"type": "output_text", "text": "  来自 Responses 的摘要  "}]}]})
+
+        original = watch.urllib.request.urlopen
+        watch.urllib.request.urlopen = fake_urlopen
+        try:
+            text = watch.ai_summary(cfg, [{"title": "VMISS 补货"}], "10-21")
+        finally:
+            watch.urllib.request.urlopen = original
+        self.assertEqual(text, "来自 Responses 的摘要")
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(calls[0].endswith("/chat/completions"))
+        self.assertTrue(calls[1].endswith("/responses"))
+
+    def test_extract_responses_text_variants(self):
+        self.assertEqual(watch.extract_responses_text({"output_text": " 直接文本 "}), "直接文本")
+        self.assertEqual(
+            watch.extract_responses_text({"output": [{"content": [{"text": "第一段"}, {"text": "第二段"}]}]}),
+            "第一段\n第二段",
+        )
+        self.assertEqual(watch.extract_responses_text({}), "")
 
     def test_digest_uses_ai_summary_and_marks_state(self):
         hit = {
