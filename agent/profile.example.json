@@ -25,6 +25,27 @@
     }
   ],
   "accept_second_hand": true,
+  "budget_rules": {
+    "note": "先算每月真实成本再和预算比。官方年付套餐摊月价通常远低于预算，只有二手溢价才可能超。",
+    "formula": "每月成本 = 总价 / 可用月数；二手用 (剩余价值 + 溢价) / 剩余月数",
+    "do_not_flag_as_over_budget": [
+      "官方在售的年付套餐：折算后基本都在预算内"
+    ],
+    "flag_as_over_budget": [
+      "二手要价明显高于官方剩余价值加合理溢价"
+    ]
+  },
+  "price_anchors": [
+    {
+      "model": "DMIT LAX.EB.WEE",
+      "official_usd_year": 39.9,
+      "official_cny_year": 283,
+      "official_cny_month": 24,
+      "spec": "1C1G/20G SSD/1000G 流量/1Gbps（超量降速 2Mbps）",
+      "status": "活动款，经常售罄；补货即抢",
+      "note": "预算基准机型。官方价在预算内，不要判超额。"
+    }
+  ],
   "second_hand_rules": [
     "只有目标机型接受溢价",
     "必须能改邮箱，或原邮 + push 且费用明确",

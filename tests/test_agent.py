@@ -35,6 +35,23 @@ class AgentTestCase(unittest.TestCase):
         self.assertEqual(data["targets"][0]["model"], "DMIT LAX.EB.WEE")
         self.assertTrue(data["targets"][0]["aliases"])
 
+    def test_profile_example_carries_price_anchor(self):
+        """价格锚点必须存在，否则 Agent 会自己猜价格，可能把官方年付判成超额。"""
+        data = json.loads((AGENT_DIR / "profile.example.json").read_text(encoding="utf-8"))
+        anchors = {a["model"]: a for a in data.get("price_anchors", [])}
+        self.assertIn("DMIT LAX.EB.WEE", anchors)
+        anchor = anchors["DMIT LAX.EB.WEE"]
+        self.assertEqual(anchor["official_usd_year"], 39.9)
+        # 39.9 美元年付摊到月应在预算内，锚点不能自相矛盾
+        self.assertLess(anchor["official_cny_month"], data["budget_month_cny_max"])
+        self.assertIn("budget_rules", data)
+        self.assertIn("formula", data["budget_rules"])
+
+    def test_prompt_warns_against_flagging_annual_price(self):
+        prompt = (AGENT_DIR / "prompt.md").read_text(encoding="utf-8")
+        self.assertIn("price_anchors", prompt)
+        self.assertIn("不要因为", prompt)
+
     def test_load_profile_falls_back_to_example(self):
         with tempfile.TemporaryDirectory() as tmp:
             # 指向不存在的 profile.json 时应回退到 example
