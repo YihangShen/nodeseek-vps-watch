@@ -1,0 +1,40 @@
+{
+  "name": "常用运营商 / 性价比线路机",
+  "budget_month_cny_max": 40,
+  "budget_month_cny_target": 35,
+  "currency_cny_per_usd": 7.1,
+  "location": "中国大陆家宽",
+  "requires": [
+    "稳定长期使用，能解锁 ChatGPT / Claude / Gemini 等主流 AI 服务",
+    "IP 干净或原生，允许再套一层落地机",
+    "线路回程对联通友好：CN2 GIA / CMIN2 / AS9929 / CUII / 4837 优化 / 三网优化"
+  ],
+  "regions_preferred": ["美西", "洛杉矶", "亚太"],
+  "line_tiers": {
+    "tier1": ["cn2 gia", "cmin2", "9929", "as9929", "cuii", "10099"],
+    "tier2": ["4837", "cmi", "三网优化", "优化线路", "dc6", "dc9"],
+    "avoid": ["普通国际线路", "未说明回程"]
+  },
+  "targets": [
+    {
+      "model": "DMIT LAX.EB.WEE",
+      "aliases": ["lax.eb.wee", "lax eb wee", "laxebwee", "eb.wee", "eb wee", "an4.eb.wee", "an5.eb.wee"],
+      "spec": "1C1G20G / 1000G 流量 / 1Gbps / 2Mbps / 39.9 刀年付 活动款",
+      "want": "second_hand",
+      "note": "有人出二手立刻通知；接受溢价但要考核剩余时长、能否改邮、push 费"
+    }
+  ],
+  "accept_second_hand": true,
+  "second_hand_rules": [
+    "只有目标机型接受溢价",
+    "必须能改邮箱，或原邮 + push 且费用明确",
+    "真实月成本 = (剩余价值 + 溢价) / 剩余月数，超过预算上限就不推荐"
+  ],
+  "noise_to_ignore": [
+    "日常闲聊、吐槽、投票、提问",
+    "纯测评留档、测速截图、IP 晒图（除非附带在售/补货/转让）",
+    "求购、拼车、代购",
+    "非目标机型的溢价二手",
+    "优惠券、代金券、学生认证、软件订阅"
+  ]
+}

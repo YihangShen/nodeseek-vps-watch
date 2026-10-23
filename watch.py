@@ -47,6 +47,7 @@ LOCK_STALE_SECONDS = 300
 DEFAULT_CONFIG = {
     "threshold": 6,
     "instant_threshold": 9,
+    "important_threshold": 13,
     "history_limit": 20000,
     "gap_report_threshold": 3,
     "digest_even_if_empty": True,
@@ -101,6 +102,26 @@ DEFAULT_CONFIG = {
             "上新", "补货通知", "开卖", "秒杀", "预告", "预约", "即将", "提醒",
             "补货预告", "开售时间", "放售",
         ],
+        # strong_actions：只有这些「真的能下手」的动作才够格发即时提醒。
+        # 年付、优惠、活动这类词只参与打分，单独出现不会打扰用户。
+        "strong_actions": [
+            "补货", "抢购", "开抢", "开售", "放货", "秒杀", "补货通知", "补货预告",
+            "开售时间", "放售", "限量补货", "开卖", "上新", "上架", "到货",
+        ],
+        # targets：用户明确想买的机型。有人出二手时立刻通知，不看分数。
+        "targets": [
+            "lax.eb.wee", "lax eb wee", "laxebwee", "eb.wee", "eb wee",
+        ],
+        # sell_markers：出现这些才算「有人在出货」。
+        "sell_markers": [
+            "出", "转", "转让", "出售", "甩", "出手", "明盘", "溢价", "带价",
+        ],
+        # buy_markers：求购口吻，优先级高于 sell_markers。
+        # 像「[收] LAX.EB.WEE 有人出吗」同时含「收」和「出」，必须先判成求购。
+        "buy_markers": [
+            "收", "求", "蹲", "想入", "想买", "想收", "有没有人出", "有人出吗",
+            "带价来", "收购", "问一下", "哪里能买",
+        ],
         # exclude：标题命中就整条丢掉（求购、拼车这类不是抢购信息）
         "exclude": [
             "收个", "收一", "收1", "收台", "收", "换", "求购", "求", "拼车",
@@ -112,19 +133,6 @@ DEFAULT_CONFIG = {
         ],
     },
 }
-
-# 标题命中权重高于正文摘要：同一组关键词只取最高权重，避免同义词堆叠虚高。
-GROUP_WEIGHTS = {
-    "brands": (6, 2),
-    "deal_actions": (4, 1),
-    "routes": (3, 1),
-    "regions": (2, 1),
-    "needs": (2, 1),
-}
-
-# 只有这几组命中才算「跟美西线路机有关」，needs 只用来加权
-TOPICAL_GROUPS = ("brands", "routes", "regions")
-
 
 def log(msg: str) -> None:
     line = f"{datetime.now(CST).strftime('%Y-%m-%d %H:%M:%S')} {msg}"
@@ -171,12 +179,19 @@ class SingleInstance:
 
 
 def deep_merge(base: dict, override: dict) -> dict:
-    out = dict(base)
+    """深拷贝后合并，避免调用方修改结果时污染 DEFAULT_CONFIG。"""
+    out = {}
+    for key, value in (base or {}).items():
+        out[key] = deep_merge(value, {}) if isinstance(value, dict) else (
+            list(value) if isinstance(value, list) else value
+        )
     for key, value in (override or {}).items():
         if isinstance(value, dict) and isinstance(out.get(key), dict):
             out[key] = deep_merge(out[key], value)
         else:
-            out[key] = value
+            out[key] = deep_merge(value, {}) if isinstance(value, dict) else (
+                list(value) if isinstance(value, list) else value
+            )
     return out
 
 
@@ -362,66 +377,6 @@ def parse_feed(payload: bytes) -> list[dict]:
     return items
 
 
-def score_item(item: dict, rules: dict) -> tuple[int, list[str], bool]:
-    """返回 (分数, 命中关键词, 是否命中品牌/线路/地区)。"""
-    title = item["title"].lower()
-    body = (item.get("description") or "").lower()
-    score = 0
-    matched: list[str] = []
-    topical = False
-
-    for group in GROUP_WEIGHTS:
-        title_weight, body_weight = GROUP_WEIGHTS[group]
-        best = 0
-        for keyword in rules.get(group, []):
-            kw = keyword.lower()
-            if kw in title:
-                best = max(best, title_weight)
-                matched.append(keyword)
-            elif kw in body:
-                best = max(best, body_weight)
-                matched.append(f"{keyword}(正文)")
-            if best and group in TOPICAL_GROUPS:
-                topical = True
-        score += best
-
-    for keyword in rules.get("penalty", []):
-        if keyword.lower() in title:
-            score -= 5
-            matched.append(f"-{keyword}")
-
-    if item.get("category") == "info":
-        score += 1
-    if "优惠" in item["title"] or "促销" in item["title"]:
-        score += 1
-    return score, matched, topical
-
-
-def is_instant(item: dict, score: int, cfg: dict) -> bool:
-    """什么值得立刻打扰：线路 + 动作，或者品牌 + 抢购/补货/预告类动作。
-
-    光有品牌没有动作（例如「vmiss 又被 D 了」）不进即时通道，只进日报。
-    """
-    if score < cfg["instant_threshold"]:
-        return False
-    title = item["title"].lower()
-    rules = cfg["rules"]
-    if any(kw.lower() in title for kw in rules.get("penalty", [])):
-        return False
-    route = any(kw.lower() in title for kw in rules["routes"])
-    brand = any(kw.lower() in title for kw in rules["brands"])
-    action = any(kw.lower() in title for kw in rules["deal_actions"])
-    if route and (brand or action):
-        return True
-    return brand and action
-
-
-def is_vetoed(item: dict, rules: dict) -> bool:
-    """求购、拼车、出租这类帖子直接丢弃。"""
-    title = item["title"].lower()
-    return any(kw.lower() in title for kw in rules.get("exclude", []))
-
-
 def format_time(value: Optional[str]) -> str:
     if not value:
         return "-"
@@ -431,49 +386,11 @@ def format_time(value: Optional[str]) -> str:
         return value
 
 
-GROUP_LABELS = {
-    "brands": "厂商",
-    "routes": "线路",
-    "regions": "地区",
-    "deal_actions": "动作",
-    "needs": "你的需求",
-    "penalty": "注意",
-}
-
-
-def group_hits(item: dict, rules: dict) -> dict:
-    """按组收集命中关键词，邮件里就能写成「线路 CN2 GIA · 地区 洛杉矶」。"""
-    title = (item.get("title") or "").lower()
-    body = (item.get("description") or "").lower()
-    out = {}
-    for group in list(GROUP_WEIGHTS) + ["penalty"]:
-        words = []
-        for keyword in rules.get(group, []):
-            kw = keyword.lower()
-            if kw in title:
-                words.append(keyword)
-            elif kw in body:
-                words.append(f"{keyword}(摘要)")
-        if words:
-            out[group] = words[:5]
-    return out
-
-
 def why_line(item: dict) -> str:
-    groups = item.get("groups") or {}
-    if groups:
-        parts = []
-        for group, words in groups.items():
-            label = GROUP_LABELS.get(group, group)
-            if group == "penalty":
-                parts.append("注意 " + "/".join(w.lstrip("-") for w in words))
-            else:
-                parts.append(f"{label} " + " / ".join(words))
-        return " · ".join(parts)
-    parts = list(item.get("matched", [])[:8])
-    negatives = item.get("negatives") or []
-    if negatives:
-        parts.append("疑似非新品：" + "/".join(n.lstrip("-") for n in negatives))
+    """一句话说明这条为什么被选中。Agent 的判断理由优先。"""
+    if item.get("ai_reason"):
+        return str(item["ai_reason"])
+    parts = [str(m) for m in (item.get("matched") or [])[:8]]
     return " ".join(parts)
 
 
@@ -657,9 +574,10 @@ def recent_gaps(state: dict, since: Optional[str], threshold: int) -> list[int]:
 
 # 默认买家画像保持通用，个人偏好通过 config.ai.user_profile 或环境变量 AI_USER_PROFILE 注入
 DEFAULT_USER_PROFILE = (
-    "中国大陆家宽用户，运营商不限，最好对联通 / 电信 / 移动都友好；只要美西，洛杉矶优先；"
+    "中国大陆家宽用户，常用运营商线路，回程要对联通友好；只要美西，洛杉矶优先；"
     "看重 IP 质量，希望原生或干净 IP，能解锁 ChatGPT / Claude / Gemini / Netflix 等主流服务；"
-    "带宽和流量不用很大但不能是小口子；不追高溢价的二手转让。"
+    "带宽和流量不用很大但不能是小口子；明确想买 DMIT LAX.EB.WEE（1C1G20G / 1000G 流量 / 1Gbps / 39.9 刀年付 活动款），"
+    "有人出二手要立刻通知；不追高溢价的普通二手机型。"
 )
 
 AI_SYSTEM_PROMPT_TEMPLATE = (
@@ -796,6 +714,206 @@ def extract_responses_text(data: dict) -> str:
     return "\n".join(chunks).strip()
 
 
+AI_JUDGE_SYSTEM_PROMPT = (
+    "你是一个 VPS 抢购情报筛选助手。用户只想在「真的值得行动」时被打扰。\n"
+    "用户画像：{profile}\n"
+    "\n"
+    "你会收到一批 NodeSeek 新帖（标题、分类、作者、摘要）。请逐条判断：这条是否值得立刻通知用户？\n"
+    "\n"
+    "【值得通知】\n"
+    "- 有人出售用户指定机型（标题里出现目标机型，并且是真的在卖）\n"
+    "- 官方补货 / 开抢 / 开售 / 放货 / 秒杀，且是美西或优质线路机型\n"
+    "- 轰动性的抢购消息：开售几十秒售罄、大批量放货、明显会秒没的新批次预告\n"
+    "- 直接影响购买决策的突发情况：热门机型被 DDoS 打到不可用、商家跑路/封号风险\n"
+    "\n"
+    "【不要通知】\n"
+    "- 日常讨论、吐槽、提问、评价、投票\n"
+    "- 测评留档、测速报告、IP 质量晒图（除非附带明确的在售/补货信息）\n"
+    "- 求购帖（用户在找货，不是有货）\n"
+    "- 非美西、非优质线路的机器；VPS 无关的话题\n"
+    "- 二手溢价转让，除非正是用户指定的机型\n"
+    "- 优惠券、代金券、学生认证之类的羊毛\n"
+    "\n"
+    "宁可漏报也不要误报。拿不准的一律判为不通知。\n"
+    "\n"
+    "只输出 JSON，不要任何解释文字、不要 markdown 代码块。格式：\n"
+    '{{"headline": "一句话概括本批最重要的情报，没有就写空字符串", '
+    '"items": [{{"id": 帖子编号, "important": true, "urgency": "high", "reason": "一句话说明为什么值得通知"}}]}}\n'
+    "items 里只放 important 为 true 的条目；可以返回空数组。"
+)
+
+
+def build_judge_prompt(items: list[dict]) -> str:
+    lines = [f"共 {len(items)} 条新帖，请逐条判断：", ""]
+    for index, item in enumerate(items, 1):
+        lines.append(f"帖子编号：{item['id']}")
+        lines.append(f"标题：{item.get('title', '')}")
+        lines.append(f"分类：{item.get('category', '')} 作者：{item.get('author', '')}")
+        summary = readable_summary(item, 300)
+        if summary:
+            lines.append(f"摘要：{summary}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def parse_judge_json(raw: str) -> Optional[dict]:
+    """容忍模型偶尔包上代码块或前后加话。"""
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
+        text = re.sub(r"\s*```$", "", text).strip()
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        data = json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def ai_judge(cfg: dict, items: list[dict]) -> Optional[dict]:
+    """把新帖交给选型 Agent 判断值不值得通知。失败返回 None，调用方保持安静。
+
+    判断逻辑、用户画像、查证工具都在 agent/ 目录里：
+    - agent/prompt.md   判断框架与输出格式
+    - agent/profile.json 用户画像（预算、目标机型、线路偏好）
+    - agent/tools.py    search / fetch 工具
+    Python 只负责传帖子和收结论，不做关键词打分。
+    """
+    ai = cfg.get("ai") or {}
+    if not ai.get("enabled"):
+        log("AI 未启用，无法判断情报重要性，本轮不发信")
+        return None
+    api_key = ai.get("api_key") or os.environ.get("NODESEEK_AI_KEY", "")
+    model = ai.get("model")
+    if not api_key or not model:
+        log("AI 缺少 api_key 或 model，本轮不发信")
+        return None
+
+    try:
+        agent_dir = Path(__file__).resolve().parent / "agent"
+        if str(agent_dir) not in sys.path:
+            sys.path.insert(0, str(agent_dir))
+        import agent as agent_module  # noqa: PLC0415 - 按需导入，本地快速路径不受影响
+    except Exception as exc:  # noqa: BLE001 - 缺少 agent 时回退到内置提示词
+        log(f"agent 模块不可用（{type(exc).__name__}: {exc}），回退内置判定")
+        return _ai_judge_fallback(cfg, items)
+
+    profile = agent_module.load_profile()
+    # 允许用配置或环境变量补充画像，不覆盖 agent/profile.json
+    extra_profile = (ai.get("user_profile") or os.environ.get("AI_USER_PROFILE") or "").strip()
+    if extra_profile:
+        profile = {**profile, "extra_notes": extra_profile}
+
+    verdict = agent_module.run_agent(
+        agent_module.build_judge_input(items),
+        api_key,
+        profile,
+        base_url=ai.get("base_url") or agent_module.DEFAULT_BASE,
+        model=model,
+        proxy=os.environ.get("NODESEEK_PROXY", ""),
+    )
+    if verdict is None:
+        log("Agent 判定失败，本轮保持安静")
+    return verdict
+
+
+def _ai_judge_fallback(cfg: dict, items: list[dict]) -> Optional[dict]:
+    """agent 目录不可用时的内置判定，保证监控还能工作。"""
+    ai = cfg.get("ai") or {}
+    api_key = ai.get("api_key") or os.environ.get("NODESEEK_AI_KEY", "")
+    profile = (ai.get("user_profile") or os.environ.get("AI_USER_PROFILE") or "").strip()
+    system_prompt = AI_JUDGE_SYSTEM_PROMPT.format(profile=profile or DEFAULT_USER_PROFILE)
+    payload = {
+        "model": ai.get("model"),
+        "temperature": 0,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": build_judge_prompt(items)},
+        ],
+    }
+    status, raw = http_post_json(
+        f"{(ai.get('base_url') or 'https://api.openai.com/v1').rstrip('/')}/chat/completions",
+        payload,
+        {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}", "User-Agent": UA},
+        int(ai.get("timeout", 60)),
+    )
+    if status != 200:
+        log(f"AI 判定失败（HTTP {status}）：{raw[:300]}")
+        return None
+    try:
+        content = (json.loads(raw)["choices"][0]["message"]["content"] or "").strip()
+    except Exception:  # noqa: BLE001
+        log(f"AI 判定返回结构异常：{raw[:300]}")
+        return None
+    return parse_judge_json(content)
+
+
+def render_ai_report(items: list[dict], headline: str, when: str) -> tuple[str, str]:
+    """按 Agent 的结论渲染邮件正文：值不值得买、每月成本、线路、风险。"""
+    title = headline or "NodeSeek 重要情报"
+    text_lines = [title, f"{when} · 共 {len(items)} 条", ""]
+    rows = []
+    for item in items:
+        reason = item.get("ai_reason") or ""
+        verdict = item.get("ai_verdict") or ""
+        line = item.get("ai_line") or ""
+        price = item.get("ai_price")
+        risks = item.get("ai_risks") or []
+        summary = readable_summary(item, 200)
+
+        # 结论行：值得买 / 值得看 / 观察 + 每月成本
+        badges = [b for b in [verdict, line] if b]
+        if isinstance(price, (int, float)) and price > 0:
+            badges.append(f"约 {price:.0f} 元/月")
+        header = f"- {item['title']}"
+        if badges:
+            header += f"\n  结论：{' · '.join(badges)}"
+        text_lines.append(header)
+        if reason:
+            text_lines.append(f"  为什么值得看：{reason}")
+        if summary:
+            text_lines.append(f"  摘要：{summary}")
+        for risk in risks:
+            text_lines.append(f"  ⚠ 风险：{risk}")
+        text_lines.append(f"  {item['link']}")
+        text_lines.append("")
+
+        badge_html = "".join(
+            f'<span style="display:inline-block;background:#eef2ff;color:#3730a3;'
+            f'border-radius:4px;padding:2px 6px;font-size:12px;margin:0 4px 4px 0">{html.escape(b)}</span>'
+            for b in badges
+        )
+        risk_html = ""
+        if risks:
+            risk_html = (
+                '<ul style="margin:6px 0 0;padding-left:18px;color:#b45309;font-size:13px">'
+                + "".join(f"<li>{html.escape(r)}</li>" for r in risks)
+                + "</ul>"
+            )
+        rows.append(
+            f"""<tr><td style="padding:12px;border-bottom:1px solid #e5e7eb">
+  <a href="{html.escape(item['link'])}" style="color:#1d4ed8;font-weight:600;text-decoration:none;font-size:14px">{html.escape(item['title'])}</a>
+  <div style="margin-top:6px">{badge_html}</div>
+  <div style="color:#b45309;font-size:13px;margin-top:6px">{html.escape(reason)}</div>
+  {f'<div style="color:#374151;font-size:13px;margin-top:6px">{html.escape(summary)}</div>' if summary else ''}
+  {risk_html}
+  <div style="color:#9ca3af;font-size:12px;margin-top:6px">{html.escape(format_time(item.get('published')))} · {html.escape(item.get('category',''))} · {html.escape(item.get('author',''))}</div>
+</td></tr>"""
+        )
+    html_body = (
+        "<html><body style=\"margin:0;background:#f9fafb;font-family:-apple-system,'PingFang SC',Arial,sans-serif\">"
+        "<div style=\"max-width:680px;margin:0 auto;padding:20px\">"
+        f"<h2 style=\"font-size:17px;color:#111827;margin:0 0 6px\">{html.escape(title)}</h2>"
+        f"<p style=\"color:#6b7280;font-size:13px;margin:0 0 14px\">{html.escape(when)} · 共 {len(items)} 条</p>"
+        f"<table style=\"width:100%;border-collapse:collapse;background:#fff;border:1px solid #e5e7eb\">{''.join(rows)}</table>"
+        "<p style=\"color:#9ca3af;font-size:12px;margin-top:14px\">AI 判定 · 来源：NodeSeek 公开 RSS</p>"
+        "</div></body></html>"
+    )
+    return "\n".join(text_lines), html_body
+
+
 def command_run(cfg: dict, dry_run: bool = False) -> int:
     state = load_state()
     seen = set(state.get("seen", []))
@@ -817,25 +935,6 @@ def command_run(cfg: dict, dry_run: bool = False) -> int:
         gaps = [pid for pid in range(max_id + 1, current_max) if pid not in visible]
 
     now_iso = datetime.now(timezone.utc).isoformat()
-    hits = []
-    if not first_run:
-        for item in new_items:
-            if is_vetoed(item, cfg["rules"]):
-                continue
-            score, matched, topical = score_item(item, cfg["rules"])
-            if score >= cfg["threshold"] and topical:
-                hits.append(
-                    {
-                        **item,
-                        "score": score,
-                        "matched": [m for m in matched if not m.startswith("-")],
-                        "negatives": [m for m in matched if m.startswith("-")],
-                        "groups": group_hits(item, cfg["rules"]),
-                        "detected_at": now_iso,
-                        "instant": is_instant(item, score, cfg),
-                    }
-                )
-
     state["seen"] = list(dict.fromkeys(list(seen) + [it["guid"] for it in items] + [str(it["id"]) for it in items]))
     state["max_id"] = max(max_id, current_max)
     state["last_run"] = now_iso
@@ -844,33 +943,66 @@ def command_run(cfg: dict, dry_run: bool = False) -> int:
         state.setdefault("gap_events", []).append({"at": now_iso, "ids": gaps})
         state["gap_events"] = state["gap_events"][-20:]
 
-    if not dry_run:
-        append_hits(hits)
-        save_state(state, cfg["history_limit"])
-
     if first_run:
+        if not dry_run:
+            save_state(state, cfg["history_limit"])
         log(f"首次运行，已建立基线（{len(items)} 条），不发送历史告警")
         return 0
 
-    instant_hits = [hit for hit in hits if hit["instant"]]
-    log(f"本轮新增 {len(new_items)} 条，命中 {len(hits)} 条（即时 {len(instant_hits)} 条）")
+    log(f"本轮新增 {len(new_items)} 条，交给 AI 判断重要性")
     if gaps:
         log(f"检测到可能的遗漏区间（共 {len(gaps)} 条）: {', '.join(str(pid) for pid in gaps[:20])}")
 
-    if dry_run:
-        for hit in hits:
-            print(f"[score={hit['score']}] {hit['title']} -> {hit['link']}")
+    if not new_items:
+        if not dry_run:
+            save_state(state, cfg["history_limit"])
         return 0
 
-    if instant_hits:
-        instant_hits.sort(key=lambda hit: -hit["score"])
-        subject = f"⚡ 疑似抢购/补货：{instant_hits[0]['title'][:40]}"
-        send_mail(
-            cfg,
-            subject,
-            render_html(instant_hits, subject, f"共 {len(instant_hits)} 条高优先命中 · {format_time(now_iso)}"),
-            render_text(instant_hits, subject, f"共 {len(instant_hits)} 条高优先命中"),
+    if dry_run:
+        for item in new_items:
+            print(f"[{item['id']}] {item['title']} -> {item['link']}")
+        return 0
+
+    # 判断权完全在 AI：把本批新帖整批发过去，只有它说重要才通知用户。
+    verdict = ai_judge(cfg, new_items)
+    if verdict is None:
+        save_state(state, cfg["history_limit"])
+        log("AI 判定不可用，本轮保持安静")
+        return 0
+
+    by_id = {str(item["id"]): item for item in new_items}
+    important: list[dict] = []
+    for entry in verdict.get("items") or []:
+        if not isinstance(entry, dict) or not entry.get("important"):
+            continue
+        item = by_id.get(str(entry.get("id")))
+        if not item:
+            continue
+        important.append(
+            {
+                **item,
+                "ai_reason": str(entry.get("reason") or ""),
+                "ai_urgency": str(entry.get("urgency") or ""),
+                "ai_verdict": str(entry.get("verdict") or ""),
+                "ai_line": str(entry.get("line") or ""),
+                "ai_price": entry.get("price_month_cny"),
+                "ai_risks": [str(r) for r in (entry.get("risks") or []) if r][:3],
+            }
         )
+
+    append_hits([{**item, "detected_at": now_iso, "score": 0, "matched": ["ai"], "important": True} for item in important])
+    save_state(state, cfg["history_limit"])
+
+    if not important:
+        log(f"AI 判定：本批 {len(new_items)} 条都不值得通知，保持安静")
+        return 0
+
+    important.sort(key=lambda it: (it.get("ai_urgency") != "high", -int(it["id"])))
+    headline = str(verdict.get("headline") or "").strip()
+    subject = headline[:60] if headline else f"NodeSeek 重要情报：{important[0]['title'][:40]}"
+    text_body, html_body = render_ai_report(important, headline, format_time(now_iso))
+    log(f"AI 判定 {len(important)} 条重要情报，发送邮件")
+    send_mail(cfg, subject, html_body, text_body)
     return 0
 
 
@@ -912,6 +1044,14 @@ def command_digest(
         print("无新的命中记录")
         return 0
 
+    # 日报只谈重要情报：日常讨论、测评留档、被 D 之类不进邮件。
+    # 历史命中没有 important 字段，按当时的标准视为重要，保持向后兼容。
+    important = [hit for hit in hits if hit.get("important", True)]
+    ignored = [hit for hit in hits if not hit.get("important", True)]
+    if hits and not important and not cfg.get("digest_even_if_empty", True):
+        print(f"本轮 {len(hits)} 条命中都不重要，跳过发信")
+        return 0
+
     if not hits and not gap_links:
         subject = "NodeSeek 美西 VPS 日报（今日无命中）"
         intro = f"统计区间起于 {window} · 期间没有出现美西优质线路相关的抢购或补货信息"
@@ -924,20 +1064,22 @@ def command_digest(
             "</body></html>"
         )
     else:
-        subject = f"NodeSeek 美西 VPS 情报汇总（{len(hits)} 条）"
-        intro = f"统计区间起于 {window}"
+        subject = f"NodeSeek 美西 VPS 情报汇总（{len(important)} 条）"
+        intro = f"统计区间起于 {window} · 共 {len(important)} 条值得关注"
+        if ignored:
+            intro += f"，另有 {len(ignored)} 条闲聊已略过"
         if gap_links:
             intro += f" · 另有 {len(gap_links)} 条帖子可能落在 RSS 窗口之外"
-        summary = ai_summary(cfg, hits, window) if use_ai else None
-        if summary is None and use_ai and (cfg.get("ai") or {}).get("enabled") and hits:
+        summary = ai_summary(cfg, important, window) if use_ai else None
+        if summary is None and use_ai and (cfg.get("ai") or {}).get("enabled") and important:
             intro += " · ⚠️ AI 摘要本轮不可用，下面这封是关键词版（详见日志）"
         if summary:
-            subject = f"NodeSeek 美西 VPS 日报（{len(hits)} 条）"
-            raw_list = render_text(hits, "", "").strip()
+            subject = f"NodeSeek 美西 VPS 日报（{len(important)} 条）"
+            raw_list = render_text(important, "", "").strip()
             text_body = f"{summary}\n\n---- 原始命中 ----\n{raw_list}"
             if gap_links:
                 text_body += "\n\n可能漏掉的帖子：\n" + "\n".join(gap_links)
-            hot, warm = split_tiers(hits)
+            hot, warm = split_tiers(important)
             sections = render_section("值得立刻看", hot, "#b91c1c") + render_section("可以慢慢看", warm, "#1d4ed8")
             gap_block = ""
             if gap_links:
@@ -955,10 +1097,10 @@ def command_digest(
                 "</div></body></html>"
             )
         else:
-            text_body = render_text(hits, subject, intro)
+            text_body = render_text(important, subject, intro)
             if gap_links:
                 text_body += "\n\n可能漏掉的帖子：\n" + "\n".join(gap_links)
-            html_body = render_html(hits, subject, intro)
+            html_body = render_html(important, subject, intro)
 
     ok = send_mail(cfg, subject, html_body, text_body)
     if ok:

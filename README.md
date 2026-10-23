@@ -1,15 +1,46 @@
 # nodeseek-vps-watch
 
-盯住 NodeSeek 上「美西 + 优质线路」的 VPS 情报：抢购、补货、上架类帖子即时发邮件提醒，其余命中每天汇总成一份日报。
+盯住 NodeSeek 上「值得出手」的 VPS 情报：**由选型 Agent 判断值不值得买**，只有真的值得行动时才发邮件。
 
-写给想抢搬瓦工、DMIT、VMISS 这类线路机、又不想整天泡论坛的人。
+写给想抢搬瓦工、DMIT、VMISS 这类线路机、又不想整天泡论坛、更不想被垃圾信息打扰的人。
 
 - 只用 Python 标准库，零第三方依赖，`python3 watch.py` 即可运行
 - 数据源是 NodeSeek 公开 RSS（主站和 API 都在 Cloudflare 后面，抓不到）
-- 标题命中权重高于正文摘要，品牌 / 线路 / 地区 / 动作 / 排除词都能自己改
-- 抢购补货类帖子即时发信，普通命中进每日汇总，没有命中的日子不发信
+- **判断权在 Agent**：Python 只负责抓帖子和发信，值不值得买由模型按你的画像判断
+- Agent 带 `search` / `fetch` 工具，能自己查第三方评测、商家口碑、当前价格来核实
+- 遇到目标机型二手、顶级线路补货、轰动性抢购才发信；闲聊水贴一律不打扰
 - 单实例锁、RSS 断层检测：机器休眠期间漏掉的帖子会给出链接
-- 不需要任何 AI API key，也不需要注册任何服务
+
+## 选型 Agent
+
+判断逻辑集中在 `agent/` 目录，改需求不用动 Python：
+
+| 文件 | 作用 |
+| --- | --- |
+| `agent/prompt.md` | 判断框架：什么值得通知、七项评估维度、输出格式 |
+| `agent/profile.json` | 你的画像：预算、常用线路、目标机型（**含隐私，不进仓库**） |
+| `agent/profile.example.json` | 画像模板，复制成 `profile.json` 再改 |
+| `agent/tools.py` | search / fetch 两个工具，走 DeepSeek Search & Fetch API |
+| `agent/agent.py` | Agent 主循环：调工具查证 → 输出结构化判断 |
+
+直接用它评估一台机器：
+
+```bash
+python3 agent/agent.py --api-key sk-xxx evaluate \
+  --query "评估现在有没有适合所在运营商、月成本 40 元以内的线路机"
+```
+
+让它判断一批帖子（监控内部就是走这条路径）：
+
+```bash
+python3 agent/agent.py --api-key sk-xxx judge --input posts.jsonl
+```
+
+输出是结构化 JSON：`headline` 一句话结论，`items` 里每条带 `verdict`（值得买 / 值得看 / 观察）、
+`price_month_cny` 每月真实成本、`line` 线路判断、`risks` 风险点。
+
+**成本和查证预算**：一次判断通常调用 2-7 次搜索，按每 1000 次 0.75 美元计费，
+单次判断的成本可以忽略；Agent 默认最多查 4 轮，查不到就标「需确认」。
 
 ## 为什么用 RSS
 

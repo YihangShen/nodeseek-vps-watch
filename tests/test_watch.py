@@ -83,6 +83,7 @@ class WatchTestCase(unittest.TestCase):
             "LOCK_PATH": watch.LOCK_PATH,
             "LOG_PATH": watch.LOG_PATH,
             "fetch_feed": watch.fetch_feed,
+            "ai_judge": watch.ai_judge,
         }
         watch.BASE = base
         watch.STATE_PATH = base / "state.json"
@@ -90,6 +91,9 @@ class WatchTestCase(unittest.TestCase):
         watch.LOCK_PATH = base / ".watch.lock"
         watch.LOG_PATH = base / "logs" / "watch.log"
         self.cfg = watch.deep_merge(watch.DEFAULT_CONFIG, {})
+        # 默认让 AI 判定返回「没有重要情报」，测试不会真的打网络；
+        # 需要验证通知行为的用例自己覆盖 ai_judge。
+        watch.ai_judge = lambda _cfg, _items: {"headline": "", "items": []}
 
     def tearDown(self):
         for key, value in self._original.items():
@@ -136,61 +140,12 @@ class WatchTestCase(unittest.TestCase):
         self.assertEqual([h["title"] for h in hot], ["a", "b"])
         self.assertEqual([h["title"] for h in warm], ["c"])
 
-    def test_why_line_labels_groups(self):
-        item = {
-            "title": "VMISS 美西 CN2 GIA 补货",
-            "groups": {"routes": ["cn2 gia"], "regions": ["洛杉矶"], "penalty": ["-溢价"]},
-        }
-        line = watch.why_line(item)
-        self.assertIn("线路 cn2 gia", line)
-        self.assertIn("地区 洛杉矶", line)
-        self.assertIn("注意 溢价", line)
-
-    def test_group_hits_collects_keywords_by_group(self):
-        item = {
-            "title": "VMISS 美西 CN2 GIA 补货 新IP段",
-            "description": "三网优化，1C1G 500GB，能解锁 ChatGPT",
-        }
-        groups = watch.group_hits(item, self.cfg["rules"])
-        self.assertIn("vmiss", groups["brands"])
-        self.assertIn("cn2 gia", groups["routes"])
-        self.assertIn("补货", groups["deal_actions"])
-        self.assertTrue(any(word.startswith("解锁") for word in groups["needs"]))
-
-    def test_score_prefers_title_and_caps_group(self):
-        item = {"title": "VMISS 美西 CN2 GIA 补货", "description": "", "category": "daily"}
-        score, matched, topical = watch.score_item(item, self.cfg["rules"])
-        # 品牌 6 + 线路 3 + 地区 2 + 动作 4
-        self.assertEqual(score, 15)
-        self.assertTrue(topical)
-        self.assertIn("vmiss", matched)
-        self.assertEqual(len([m for m in matched if m == "cn2"]), 1)
-
-    def test_body_match_scores_lower_than_title(self):
-        in_title = {"title": "DMIT 洛杉矶", "description": "", "category": "daily"}
-        in_body = {"title": "求推荐一个机器", "description": "听说 DMIT 洛杉矶不错", "category": "daily"}
-        self.assertGreater(
-            watch.score_item(in_title, self.cfg["rules"])[0],
-            watch.score_item(in_body, self.cfg["rules"])[0],
-        )
-
-    def test_penalty_keywords_reduce_score(self):
-        item = {"title": "溢价收一台搬瓦工 CN2 GIA", "description": "", "category": "daily"}
-        score, matched, _ = watch.score_item(item, self.cfg["rules"])
-        self.assertTrue(any(m.startswith("-") for m in matched))
-        self.assertLess(score, 10)
-
-    def test_buy_request_is_vetoed(self):
-        rules = self.cfg["rules"]
-        for title in [
-            "[收1台]月付5的vmiss tri",
-            "【收】+100 收Vmiss Tri Basic",
-            "[换] Vmiss Tri 5CAD 换干杯云",
-            "求购搬瓦工 DC6",
-            "IPLC 拼车 美西洛杉矶",
-        ]:
-            self.assertTrue(watch.is_vetoed({"title": title}, rules), title)
-        self.assertFalse(watch.is_vetoed({"title": "VMISS 美西 CN2 GIA 补货"}, rules))
+    def test_why_line_prefers_agent_reason(self):
+        item = {"title": "VMISS 补货", "ai_reason": "目标机型有人出货"}
+        self.assertEqual(watch.why_line(item), "目标机型有人出货")
+        # 没有 Agent 理由时退回命中词，且不报错
+        self.assertEqual(watch.why_line({"title": "x", "matched": ["vmiss"]}), "vmiss")
+        self.assertEqual(watch.why_line({"title": "x"}), "")
 
     def test_buy_request_never_becomes_hit(self):
         self.feed([NOISE_POST])
@@ -198,34 +153,6 @@ class WatchTestCase(unittest.TestCase):
         self.feed([NOISE_POST, (900010, "[收1台]月付5的vmiss美西cn2 gia tri", "带价来", "trade")])
         watch.command_run(self.cfg)
         self.assertEqual(watch.read_hits_since(None), [])
-
-    def test_noise_post_does_not_alert(self):
-        item = {"title": NOISE_POST[1], "description": NOISE_POST[2], "category": "daily"}
-        score, _, topical = watch.score_item(item, self.cfg["rules"])
-        self.assertFalse(topical)
-        self.assertLess(score, self.cfg["threshold"])
-
-    def test_instant_covers_route_and_brand_deals(self):
-        route_item = {"title": "美西 9929 线路补货 新段", "description": "", "category": "info"}
-        brand_item = {"title": "RackNerd 黑五年付优惠上架", "description": "洛杉矶机房", "category": "info"}
-        for item in (route_item, brand_item):
-            score = watch.score_item(item, self.cfg["rules"])[0]
-            self.assertTrue(watch.is_instant(item, score, self.cfg), item["title"])
-
-    def test_brand_chatter_without_action_is_not_instant(self):
-        item = {"title": "vmiss 又被 D 了？", "description": "节点飘红", "category": "daily"}
-        score = watch.score_item(item, self.cfg["rules"])[0]
-        self.assertFalse(watch.is_instant(item, score, self.cfg))
-
-    def test_presale_notice_is_instant(self):
-        item = {"title": "VMISS 11 月 1 日补货预告，洛杉矶 TRI 新批次", "description": "", "category": "info"}
-        score = watch.score_item(item, self.cfg["rules"])[0]
-        self.assertTrue(watch.is_instant(item, score, self.cfg))
-
-    def test_resale_post_is_not_instant(self):
-        item = {"title": RESALE_POST[1], "description": RESALE_POST[2], "category": "trade"}
-        score = watch.score_item(item, self.cfg["rules"])[0]
-        self.assertFalse(watch.is_instant(item, score, self.cfg))
 
     def test_first_run_seeds_baseline_without_hits(self):
         self.feed([DEAL_POST, NOISE_POST])
@@ -236,17 +163,33 @@ class WatchTestCase(unittest.TestCase):
         self.assertEqual(state["max_id"], 900003)
 
     def test_run_detects_new_deal_and_skips_duplicates(self):
-        self.feed([NOISE_POST])
-        watch.command_run(self.cfg)
-        self.feed([NOISE_POST, DEAL_POST, RESALE_POST])
-        watch.command_run(self.cfg)
+        """判断权在 AI：命中的新帖要原样交给 AI，重复帖子不再送审。"""
+        cfg = watch.deep_merge(self.cfg, {"ai": {"enabled": True, "model": "test", "api_key": "sk-test"}})
+        reviewed = []
+
+        def fake_judge(_cfg, items):
+            reviewed.append([item["id"] for item in items])
+            return {
+                "headline": "VMISS 补货",
+                "items": [{"id": DEAL_POST[0], "important": True, "urgency": "high", "reason": "官方补货"}],
+            }
+
+        original = watch.ai_judge
+        watch.ai_judge = fake_judge
+        try:
+            self.feed([NOISE_POST])
+            watch.command_run(cfg)
+            self.feed([NOISE_POST, DEAL_POST, RESALE_POST])
+            watch.command_run(cfg)
+            # 同一份 feed 再跑一次，不应把已见过的帖子重新送审
+            watch.command_run(cfg)
+        finally:
+            watch.ai_judge = original
+
+        self.assertEqual(reviewed, [[DEAL_POST[0], RESALE_POST[0]]])
         hits = watch.read_hits_since(None)
-        titles = [hit["title"] for hit in hits]
         self.assertEqual(len(hits), 1)
-        self.assertIn("VMISS", titles[0])
-        # 再跑一次同一份 feed，不应重复命中
-        watch.command_run(self.cfg)
-        self.assertEqual(len(watch.read_hits_since(None)), 1)
+        self.assertIn("VMISS", hits[0]["title"])
 
     def test_digest_print_and_json(self):
         self.feed([NOISE_POST])
@@ -416,6 +359,7 @@ class WatchTestCase(unittest.TestCase):
             "description": "三网优化，库存有限",
             "matched": ["vmiss"],
             "score": 16,
+            "important": True,
             "detected_at": "2026-10-21T06:00:00+00:00",
         }
         watch.HITS_PATH.write_text(json.dumps(hit, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -446,6 +390,7 @@ class WatchTestCase(unittest.TestCase):
             "description": "三网优化，库存有限",
             "matched": ["vmiss"],
             "score": 16,
+            "important": True,
             "detected_at": "2026-10-21T06:00:00+00:00",
         }
         watch.HITS_PATH.write_text(json.dumps(hit, ensure_ascii=False) + "\n", encoding="utf-8")

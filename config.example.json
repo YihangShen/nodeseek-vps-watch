@@ -1,6 +1,7 @@
 {
   "threshold": 6,
   "instant_threshold": 9,
+  "important_threshold": 13,
   "history_limit": 20000,
   "gap_report_threshold": 3,
   "digest_even_if_empty": false,

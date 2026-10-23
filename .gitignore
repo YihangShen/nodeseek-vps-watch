@@ -11,6 +11,10 @@ hits.jsonl
 .watch.lock
 logs/
 
+# 个人画像（含所在城市、运营商等隐私），只提交 profile.example.json
+agent/profile.json
+agent/__pycache__/
+
 # 编辑器
 .DS_Store
 .idea/

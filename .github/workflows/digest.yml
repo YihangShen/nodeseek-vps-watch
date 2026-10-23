@@ -1,10 +1,8 @@
 name: NodeSeek Daily Digest
 
-# 每天 13:30 UTC = 21:30 北京时间。只在「上次汇总之后有命中」时才发信，
-# 没有情报的日子完全不打扰。
+# 不再定时运行：判断权和数据源都在 watch.yml 里，有重要情报会立刻发信。
+# 保留这个工作流只为需要时手动补发一份汇总。
 on:
-  schedule:
-    - cron: "30 13 * * *"
   workflow_dispatch:
     inputs:
       hours:
@@ -66,6 +64,9 @@ jobs:
           AI_MODEL: ${{ vars.AI_MODEL }}
           # 个人偏好（例如常用运营商、所在城市）放在 Secret 里，公开仓库也不会暴露
           AI_USER_PROFILE: ${{ secrets.AI_USER_PROFILE }}
+          DEEPSEEK_API_KEY: ${{ secrets.AI_API_KEY }}
+          DEEPSEEK_BASE_URL: ${{ vars.AI_BASE_URL }}
+          AGENT_MODEL: ${{ vars.AI_MODEL }}
           GITHUB_TOKEN: ${{ github.token }}
           DIGEST_EVEN_IF_EMPTY: ${{ github.event.inputs.even_if_empty || 'false' }}
           DIGEST_HOURS: ${{ github.event.inputs.hours }}

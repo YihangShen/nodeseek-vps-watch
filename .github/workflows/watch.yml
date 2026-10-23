@@ -1,11 +1,10 @@
 name: NodeSeek Watch
 
 # 说明：GitHub 的 schedule 是「尽力而为」，高峰期可能延迟几分钟到几十分钟。
-# 公开仓库的 Actions 分钟数不计费，所以用 10 分钟一次换更快的响应；
-# 如果要改成别的频率，直接改下面的 cron 表达式即可。
+# 每 30 分钟抓一次 NodeSeek RSS，判断权交给 AI；有值得行动的情报才发邮件。
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -47,6 +46,15 @@ jobs:
           SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+          # 选型 Agent：判断值不值得通知，可自行搜索 / 抓取第三方资料查证
+          AI_ENABLED: "true"
+          AI_PROVIDER: ${{ vars.AI_PROVIDER || 'openai' }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_BASE_URL: ${{ vars.AI_BASE_URL }}
+          AI_MODEL: ${{ vars.AI_MODEL }}
+          DEEPSEEK_API_KEY: ${{ secrets.AI_API_KEY }}
+          DEEPSEEK_BASE_URL: ${{ vars.AI_BASE_URL }}
+          AGENT_MODEL: ${{ vars.AI_MODEL }}
         run: python watch.py run
 
       - name: 保存状态到 state 分支
