@@ -572,12 +572,12 @@ def recent_gaps(state: dict, since: Optional[str], threshold: int) -> list[int]:
     return sorted(set(ids))
 
 
-# 默认买家画像保持通用，个人偏好通过 config.ai.user_profile 或环境变量 AI_USER_PROFILE 注入
+# 默认画像保持通用（仓库是公开的），个人偏好通过 agent/profile.json、
+# 环境变量 AGENT_PROFILE_JSON / AI_USER_PROFILE 注入。
 DEFAULT_USER_PROFILE = (
-    "中国大陆家宽用户，常用运营商线路，回程要对联通友好；只要美西，洛杉矶优先；"
-    "看重 IP 质量，希望原生或干净 IP，能解锁 ChatGPT / Claude / Gemini / Netflix 等主流服务；"
-    "带宽和流量不用很大但不能是小口子；明确想买 DMIT LAX.EB.WEE（1C1G20G / 1000G 流量 / 1Gbps / 39.9 刀年付 活动款），"
-    "有人出二手要立刻通知；不追高溢价的普通二手机型。"
+    "中国大陆家宽用户，回程对常用运营商友好；美西优先，亚太也可接受；"
+    "看重 IP 质量，希望原生或干净 IP，能解锁 ChatGPT / Claude / Gemini 等主流服务；"
+    "带宽和流量不用很大但不能是小口子；不追高溢价的普通二手机型。"
 )
 
 AI_SYSTEM_PROMPT_TEMPLATE = (

@@ -86,15 +86,19 @@ class AgentTestCase(unittest.TestCase):
         self.assertIn("targets", profile, "坏 Secret 不应让画像变空")
 
     def test_example_profile_has_no_personal_details(self):
-        """公开模板不能出现真实城市与运营商。"""
-        example = (AGENT_DIR / "profile.example.json").read_text(encoding="utf-8")
-        for leaked in ["某某市", "某运营商家宽"]:
-            self.assertNotIn(leaked, example, f"模板泄露了「{leaked}」")
+        """公开模板必须是占位符，不能写死任何具体地点。"""
+        data = json.loads((AGENT_DIR / "profile.example.json").read_text(encoding="utf-8"))
+        location = data["location"]
+        self.assertTrue("填写" in location, f"location 应为占位符，实际是：{location}")
+        # 占位符本身用 XX，避免出现真实城市名
+        self.assertNotRegex(location, r"[\u4e00-\u9fff]{2,4}(联通|电信|移动)")
 
     def test_prompt_has_no_hardcoded_city(self):
+        """提示词不能硬编码某个具体运营商线路，必须让模型看画像。"""
         prompt = (AGENT_DIR / "prompt.md").read_text(encoding="utf-8")
-        for leaked in ["常用运营商", "北京联通"]:
-            self.assertNotIn(leaked, prompt, f"提示词硬编码了「{leaked}」")
+        self.assertIn("见画像", prompt)
+        # 不应出现「某地+某运营商」的完整写法
+        self.assertNotRegex(prompt, r"[\u4e00-\u9fff]{2,4}(联通|电信|移动)家宽")
 
     def test_system_prompt_includes_profile_json(self):
         prompt = agent.load_system_prompt({"name": "测试用户", "budget_month_cny_max": 40})

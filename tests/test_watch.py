@@ -269,9 +269,9 @@ class WatchTestCase(unittest.TestCase):
         self.assertIsNone(watch.ai_summary(self.cfg, [{"title": "x"}], "10-21"))
 
     def test_system_prompt_uses_profile_override(self):
-        with mock.patch.dict(os.environ, {"AI_USER_PROFILE": "中国大陆家宽"}, clear=False):
+        with mock.patch.dict(os.environ, {"AI_USER_PROFILE": "某地运营商家宽"}, clear=False):
             prompt = watch.build_system_prompt(self.cfg)
-        self.assertIn("中国大陆家宽", prompt)
+        self.assertIn("某地运营商家宽", prompt)
         self.assertNotIn(watch.DEFAULT_USER_PROFILE, prompt)
         default_prompt = watch.build_system_prompt(self.cfg)
         self.assertIn(watch.DEFAULT_USER_PROFILE, default_prompt)
