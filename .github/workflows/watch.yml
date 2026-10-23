@@ -55,6 +55,8 @@ jobs:
           DEEPSEEK_API_KEY: ${{ secrets.AI_API_KEY }}
           DEEPSEEK_BASE_URL: ${{ vars.AI_BASE_URL }}
           AGENT_MODEL: ${{ vars.AI_MODEL }}
+          # 个人画像放 Secret（整份 JSON），公开仓库只留脱敏模板
+          AGENT_PROFILE_JSON: ${{ secrets.AGENT_PROFILE_JSON }}
         run: python watch.py run
 
       - name: 保存状态到 state 分支

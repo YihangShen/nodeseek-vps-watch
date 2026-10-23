@@ -53,13 +53,41 @@ def load_system_prompt(profile: Optional[dict] = None) -> str:
 
 
 def load_profile(path: Optional[str] = None) -> dict:
-    p = Path(path) if path else (PROFILE_PATH if PROFILE_PATH.exists() else PROFILE_EXAMPLE)
-    if not p.exists():
-        return {}
+    """加载用户画像，优先级从高到低：
+
+    1. 显式路径（命令行 --profile / 测试）
+    2. 环境变量 AGENT_PROFILE_JSON：整份 JSON 放 Secret，云端用这个，
+       真实偏好不进公开仓库
+    3. agent/profile.json：本地开发用，已 gitignore
+    4. agent/profile.example.json：脱敏模板，仓库里唯一提交的画像
+    """
+    if path:
+        p = Path(path)
+        if p.exists():
+            return _read_profile(p)
+
+    raw = (os.environ.get("AGENT_PROFILE_JSON") or "").strip()
+    if raw:
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            log(f"AGENT_PROFILE_JSON 不是合法 JSON，忽略：{exc}")
+        else:
+            if isinstance(data, dict):
+                return data
+            log("AGENT_PROFILE_JSON 不是 JSON 对象，忽略")
+
+    for candidate in (PROFILE_PATH, PROFILE_EXAMPLE):
+        if candidate.exists():
+            return _read_profile(candidate)
+    return {}
+
+
+def _read_profile(p: Path) -> dict:
     try:
         return json.loads(p.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        log(f"画像文件不是合法 JSON，忽略：{exc}")
+        log(f"画像文件 {p.name} 不是合法 JSON，忽略：{exc}")
         return {}
 
 

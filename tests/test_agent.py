@@ -73,6 +73,29 @@ class AgentTestCase(unittest.TestCase):
             path.write_text("{not json", encoding="utf-8")
             self.assertEqual(agent.load_profile(str(path)), {})
 
+    def test_env_profile_json_beats_repo_files(self):
+        """云端把真实画像放 Secret，优先级必须高于仓库里的文件。"""
+        payload = json.dumps({"name": "来自 Secret", "budget_month_cny_max": 35})
+        with mock.patch.dict(os.environ, {"AGENT_PROFILE_JSON": payload}, clear=False):
+            profile = agent.load_profile()
+        self.assertEqual(profile["name"], "来自 Secret")
+
+    def test_broken_env_profile_falls_back_to_file(self):
+        with mock.patch.dict(os.environ, {"AGENT_PROFILE_JSON": "{坏 JSON"}, clear=False):
+            profile = agent.load_profile()
+        self.assertIn("targets", profile, "坏 Secret 不应让画像变空")
+
+    def test_example_profile_has_no_personal_details(self):
+        """公开模板不能出现真实城市与运营商。"""
+        example = (AGENT_DIR / "profile.example.json").read_text(encoding="utf-8")
+        for leaked in ["某某市", "某运营商家宽"]:
+            self.assertNotIn(leaked, example, f"模板泄露了「{leaked}」")
+
+    def test_prompt_has_no_hardcoded_city(self):
+        prompt = (AGENT_DIR / "prompt.md").read_text(encoding="utf-8")
+        for leaked in ["常用运营商", "北京联通"]:
+            self.assertNotIn(leaked, prompt, f"提示词硬编码了「{leaked}」")
+
     def test_system_prompt_includes_profile_json(self):
         prompt = agent.load_system_prompt({"name": "测试用户", "budget_month_cny_max": 40})
         self.assertIn("VPS 选型顾问", prompt)

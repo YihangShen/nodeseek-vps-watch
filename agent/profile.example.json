@@ -1,9 +1,9 @@
 {
-  "name": "常用运营商 / 性价比线路机",
+  "name": "性价比线路机（通用模板）",
   "budget_month_cny_max": 40,
   "budget_month_cny_target": 35,
   "currency_cny_per_usd": 7.1,
-  "location": "中国大陆家宽",
+  "location": "填写你的城市与运营商，例如「XX 中国大陆家宽」",
   "requires": [
     "稳定长期使用，能解锁 ChatGPT / Claude / Gemini 等主流 AI 服务",
     "IP 干净或原生，允许再套一层落地机",

@@ -27,7 +27,7 @@
 
 ```bash
 python3 agent/agent.py --api-key sk-xxx evaluate \
-  --query "评估现在有没有适合所在运营商、月成本 40 元以内的线路机"
+  --query "评估现在有没有适合我所在运营商、月成本 40 元以内的线路机"
 ```
 
 让它判断一批帖子（监控内部就是走这条路径）：
