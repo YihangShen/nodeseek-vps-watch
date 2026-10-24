@@ -147,6 +147,88 @@ class WatchTestCase(unittest.TestCase):
         self.assertEqual(watch.why_line({"title": "x", "matched": ["vmiss"]}), "vmiss")
         self.assertEqual(watch.why_line({"title": "x"}), "")
 
+    def test_actionable_rejects_real_false_positives(self):
+        """把曾经误发的三类邮件钉成回归用例，避免再次打扰用户。"""
+        # 1. 商家官网恢复类快讯
+        self.assertFalse(
+            watch.is_actionable(
+                {
+                    "reason": "cloudie 官网恢复，属于商家可用性变化；若用户关注该商家或持有其机器，可确认是否已恢复服务",
+                    "line": "",
+                    "price_month_cny": None,
+                }
+            )
+        )
+        # 2. 信息不足：只有价格便宜，线路与解锁全是未知
+        self.assertFalse(
+            watch.is_actionable(
+                {
+                    "reason": "东京 TYO2 约 13 元/月含 1.36TB 流量，月成本远低于预算，但回程线路与 AI 解锁未说明，需确认是否对联通友好",
+                    "line": "",
+                    "price_month_cny": 13,
+                }
+            )
+        )
+        # 3. 超预算的二手（价格在调用方拦截，这里确认它本身不是可行动目标）
+        over_budget = {"reason": "DMIT LAX.Pro.TINY 二手，月成本约 61 元，仅作参考", "line": "CN2 GIA", "price_month_cny": 61}
+        self.assertTrue(over_budget["price_month_cny"] > 40)
+
+    def test_actionable_accepts_genuine_opportunities(self):
+        """真正值得通知的两类：目标机型出货、官方在售补货。"""
+        self.assertTrue(
+            watch.is_actionable(
+                {
+                    "reason": "用户点名的 LAX.EB.WEE 有人出货，可改邮箱，能直接联系卖家",
+                    "line": "CMIN2 / 9929",
+                    "price_month_cny": 24,
+                }
+            )
+        )
+        self.assertTrue(
+            watch.is_actionable(
+                {
+                    "reason": "DMIT LAX.EB 系列官方补货，39.9 刀/年，能现在下单",
+                    "line": "三网 CMIN2",
+                    "price_month_cny": 24,
+                }
+            )
+        )
+
+    def test_run_drops_over_budget_and_vague_entries(self):
+        """端到端：AI 判成重要但超预算/信息不足的条目，发信前必须被拦下。"""
+        cfg = watch.deep_merge(self.cfg, {"ai": {"enabled": True, "model": "t", "api_key": "sk-t"}})
+        watched = []
+
+        def fake_send(_cfg, subject, html_body, text_body):
+            watched.append(subject)
+            return True
+
+        def fake_judge(_cfg, items):
+            return {
+                "headline": "本批含 3 条候选",
+                "items": [
+                    {"id": 900011, "important": True, "reason": "云厂商官网恢复", "line": "", "price_month_cny": None},
+                    {"id": 900012, "important": True, "reason": "手上有台二手，61 元/月", "line": "CN2 GIA", "price_month_cny": 61},
+                    {"id": 900013, "important": True, "reason": "很便宜但一切未知，需确认", "line": "", "price_month_cny": 12},
+                ],
+            }
+
+        self.feed([NOISE_POST])
+        watch.command_run(cfg)
+        self.feed([NOISE_POST, (900011, "商家官网恢复", "", "info"),
+                   (900012, "出 DMIT LAX.Pro.TINY", "61 元/月", "trade"),
+                   (900013, "东京超低价套餐", "13 元/月", "info")])
+        original_judge, original_send = watch.ai_judge, watch.send_mail
+        watch.ai_judge = fake_judge
+        watch.send_mail = fake_send
+        try:
+            watch.command_run(cfg)
+        finally:
+            watch.ai_judge, watch.send_mail = original_judge, original_send
+
+        # 三条都被代码兜底拦下，不应发出任何邮件
+        self.assertEqual(watched, [])
+
     def test_buy_request_never_becomes_hit(self):
         self.feed([NOISE_POST])
         watch.command_run(self.cfg)

@@ -850,6 +850,39 @@ def _ai_judge_fallback(cfg: dict, items: list[dict]) -> Optional[dict]:
     return parse_judge_json(content)
 
 
+def is_actionable(entry: dict) -> bool:
+    """代码层兜底：这条情报能不能让用户现在动手做点什么。
+
+    Agent 偶尔把「只有参考价值」的条目也标成 important，用户反馈这类误报
+    最让人烦。这里做两道最低限度的拦截：
+
+    1. 关键信息不能全是「需确认」——否则用户读完也无从判断
+    2. reason 里必须说得出具体动作（买 / 联系 / 改期），不能只是「可关注」
+
+    拿不准时返回 True，把决定权留给 Agent；这里只挡明显不该发的。
+    """
+    reason = str(entry.get("reason") or "")
+    if not reason:
+        return False
+
+    # 线路是这个用户做决定的第一依据。线路没写清楚，价格再便宜也无法行动。
+    line = str(entry.get("line") or "").strip()
+    vague = sum(reason.count(word) for word in ("需确认", "未说明", "无法判断", "未知", "不确定"))
+    if not line and vague >= 1:
+        return False
+
+    # 「商家网站恢复 / 维护结束」这类可用性快讯没有可执行动作
+    if any(word in reason for word in ("官网恢复", "网站恢复", "维护结束", "工单恢复", "恢复正常")):
+        return False
+
+    # 纯「快讯/状态变化」类没有可执行动作
+    only_reference = ("参考", "了解", "观察")
+    action_words = ("买", "下单", "补货", "开抢", "开售", "联系", "改邮", "转让", "出售", "抢")
+    if any(word in reason for word in only_reference) and not any(w in reason for w in action_words):
+        return False
+    return True
+
+
 def render_ai_report(items: list[dict], headline: str, when: str) -> tuple[str, str]:
     """按 Agent 的结论渲染邮件正文：值不值得买、每月成本、线路、风险。"""
     title = headline or "NodeSeek 重要情报"
@@ -972,11 +1005,21 @@ def command_run(cfg: dict, dry_run: bool = False) -> int:
 
     by_id = {str(item["id"]): item for item in new_items}
     important: list[dict] = []
+    dropped: list[str] = []
     for entry in verdict.get("items") or []:
         if not isinstance(entry, dict) or not entry.get("important"):
             continue
         item = by_id.get(str(entry.get("id")))
         if not item:
+            continue
+        # 代码层兜底：AI 偶尔会把「超预算」或「信息不足」的条目也标成重要，
+        # 这两类正是用户抱怨的误报来源，所以在发信前再挡一次。
+        price = entry.get("price_month_cny")
+        if isinstance(price, (int, float)) and price > 40:
+            dropped.append(f"{item['title'][:30]}（{price:.0f} 元/月超预算）")
+            continue
+        if not is_actionable(entry):
+            dropped.append(f"{item['title'][:30]}（信息不足，无法行动）")
             continue
         important.append(
             {
@@ -989,6 +1032,9 @@ def command_run(cfg: dict, dry_run: bool = False) -> int:
                 "ai_risks": [str(r) for r in (entry.get("risks") or []) if r][:3],
             }
         )
+
+    if dropped:
+        log("代码兜底拦下：" + "；".join(dropped))
 
     append_hits([{**item, "detected_at": now_iso, "score": 0, "matched": ["ai"], "important": True} for item in important])
     save_state(state, cfg["history_limit"])
